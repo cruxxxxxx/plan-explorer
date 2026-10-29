@@ -1,39 +1,42 @@
 ---
 name: plan-explorer
-description: Builds and refines an interactive local "map" of a plan or code review. It has sequence diagrams, issues pinned to diagram steps, and API docs tied to the file tree, plus click-anywhere notes the user exports as JSON or sends live through a localhost bridge. Use when the user asks for a plan explorer, review map or interactive plan page, wants to "explore" or "map out" a plan, design or review, wants sequence diagrams of a plan, hands back a *-notes-*.json from one of these pages, or asks to go live with or answer questions from the page.
+description: Builds a live, interactive local "map" of a plan or code review. It has sequence diagrams, issues pinned to diagram steps, and API docs tied to the file tree. The user marks up anything on the page, and each note streams to the agent, who answers and edits the plan while the page hot-reloads. Use when the user asks for a plan explorer, review map or interactive plan page, wants to "explore" or "map out" a plan, design or review, wants sequence diagrams of a plan, or wants to answer or pick up notes from one of these pages (including a *-notes-*.json).
 ---
 
 # Plan Explorer
 
 **Focus:** a map of a plan or a code review that the agent writes from the code. It shows what happens (flows), where it goes wrong (issues pinned to diagram steps), and what code is involved (API types, by file). The human explores it, marks it up, and the agent refines it over rounds. This is not a generic document annotator.
 
-A plan explorer is a folder with two files:
+**Usage is one command; the effort goes into the data.** A plan is a folder that holds a single file, `plan.js` (`window.PLAN = { … }`). One command serves it with the skill's engine and keeps it live:
 
 ```
-<dir>/index.html   ← the engine, copied verbatim from engine/explorer.html. Never edit it per project.
-<dir>/plan.js      ← all the content: window.PLAN = { … }. This is the only file you write.
+node <skill>/scripts/live.mjs <dir>
 ```
 
-The engine renders `plan.js`. It handles the Swiss-style light and dark layout, Mermaid diagrams (pinch or ⌘-scroll to zoom, drag to pan, full screen), notes and export.
+That command (re-)starts a background server for `<dir>`, prints the page URL, and then streams the user's notes as JSON lines. Every page is live:
+- Saving a note sends it to you.
+- Your reply appears under the note.
+- Any edit to `plan.js` reloads the open page in place.
+- Engine updates reach every page, because no project keeps a copy.
 
-**Pages.** **Explore** is the home page: every area's flows with their issues listed under them, plus questions, options and sections, all filtered by search, area tags, kind, severity, category, status and origin. **API** has a folder tree on the left and a type page on the right, with a foldable dependency graph. **Roadmap** and **Notes** are the other two. Diagrams are interactive: hovering a step shows a tooltip with its linked issues, a severity dot marks steps that have issues, clicking a step opens the issue in a side drawer, and clicking a participant opens its API type. The user opens `index.html` from disk (`file://`) with no server and no build. Mermaid is the only dependency, loaded from the jsDelivr CDN.
+**Pages.** **Explore** is the home page: every area's flows with their issues under them, plus questions, options and sections, filtered by search, area tags, kind, severity, category, status and origin. **API** has a folder tree and type pages, with a foldable dependency graph. **Roadmap** and **Notes** are the other two. Diagrams are interactive: hovering a step shows a tooltip with its issues, a severity dot marks steps that have issues, clicking a step opens the issue in a side drawer, and clicking a participant opens its API type. Pinch or ⌘-scroll to zoom, drag to pan.
 
 Skill files, relative to this SKILL.md:
-- `engine/explorer.html`: the engine.
-- `reference/schema.md`: the full `plan.js` shape and the note-export format. **Read it before writing plan.js.**
+- `reference/schema.md`: the full `plan.js` shape and the note format. **Read it before writing plan.js.**
 - `reference/diagrams.md`: rules for good high-level sequence diagrams. **Read it before writing flows.**
 - `examples/plan.js`: a complete small example.
+- `scripts/live.mjs`: the server and the note stream. Protocol: `reference/live.md`.
 - `scripts/verify.sh <dir>`: validates plan.js, then renders every flow in headless Chrome and reports Mermaid errors.
-- `scripts/live.mjs`: the optional live bridge, so the page can ask questions and see the plan update in place. Protocol: `reference/live.md`.
-- `tests/run-engine-test.sh` and `tests/live-test.sh`: engine and bridge self-tests. Run them only after changing the engine or the bridge.
+- `engine/explorer.html`: the renderer. It's served from here; never copy or edit it per project.
+- `tests/run-engine-test.sh` and `tests/live-test.sh`: self-tests. Run them only after changing the engine or the server.
 
 ## Hard rules
 
 - Local files only. Never publish to claude.ai Artifacts.
-- Edit `plan.js`, not `index.html`. Engine changes are a separate, explicit request. Make them in `engine/explorer.html`, bump `ENGINE_VERSION`, run the engine test, then re-copy the engine into projects.
+- Write only `plan.js`. Engine changes are a separate, explicit request. Make them in `engine/explorer.html`, bump `ENGINE_VERSION` and run both tests. Running servers pick the change up on their own.
 - **Ids are permanent.** Notes attach to ids (`areas/<area>/sections/<id>/p0` …). Never rename or reuse an id. To restructure, add new ids and delete the old ones. Notes on deleted ids become "orphaned" and keep their quote, so nothing is lost, but renaming for tidiness breaks the user's notes.
 - Stay high level. Actors in diagrams are systems, modules or people, not methods. Go down to classes and functions only when the user asks.
-- Don't open the page or drive the browser. Give the user the path (`open <dir>/index.html`).
+- Don't open the page or drive the browser. Give the user the URL.
 
 ## Writing: technical facts only
 
@@ -106,79 +109,74 @@ Every fact lives in one place. The page reaches it from elsewhere through links,
 - Don't repeat an issue's summary in a section or caption. Link to it with `related` or `flow`/`steps`.
 - Captions say what to notice in the diagram, not what the issues say.
 
-## 1 · Seed a new explorer
+## 1 · Seed
 
 1. Gather context: the user's idea, docs and the relevant code, skimmed at the level of architecture.
-2. Pick the folder: `<project>/Docs/<slug>-explorer/` by default, or wherever the user says. `slug` is also `PLAN.id`, which keys browser storage, so keep it unique per plan.
-3. `cp <skill>/engine/explorer.html <dir>/index.html`
-4. Write `<dir>/plan.js` with `version: 1`:
+2. Pick the folder: `<project>/Docs/<slug>-plan/` by default, or wherever the user says. `slug` is also `PLAN.id`, so keep it unique per plan.
+3. Write `<dir>/plan.js` with `version: 1`:
    - an overview: a 2–4 sentence summary, goals and non-goals;
    - **3–6 areas**, each with a 1–2 sentence summary;
    - **1–3 sequence flows per area.** Aim for many small flows, not a few big ones. This is the heart of the page. Set `actors` on each one;
    - `sections` only where prose is truly needed. Keep them short;
    - `options` wherever there's a real choice. Include pros and cons, and set `pick` only once it's decided;
-   - `openQuestions`: your own questions for the user. Be generous here, because this is how exploration starts;
+   - `openQuestions`: your own questions for the user. Be generous, because this is how exploration starts;
    - `api`: the types the plan touches (see "API docs"), when the plan involves code;
    - for reviews: `issues` with `flow`, `steps` and `types` set;
    - a rough `roadmap`, if it helps;
    - `changelog: [{ version: 1, date, what: "First draft" }]`, plus `replies: {}`.
-5. Run `<skill>/scripts/verify.sh <dir>`. It needs network for the Mermaid CDN; if the sandbox blocks Chrome's network, rerun it with the sandbox disabled. Fix every ✗. Treat "not linked to a flow" warnings as work to do.
-6. Reply briefly: give the path, list what's in it, and say how to annotate: **N** toggles note mode, **Alt-click** notes anything, selecting text notes a phrase, and **Export JSON** is on the Notes page.
+4. Run `<skill>/scripts/verify.sh <dir>`. It needs network for the Mermaid CDN; if the sandbox blocks Chrome's network, rerun it with the sandbox disabled. Fix every ✗. Treat "not linked to a flow" warnings as work to do.
+5. Go live (§2), and give the user the `open` URL from the `ready` line. The first visit sets a cookie, so after that the plain `url` works and can be bookmarked. Then list in one or two lines what's in the plan.
 
-## 2 · Refine from exported notes
+## 2 · Live: notes arrive while the user reads
 
-The user exports `<plan-id>-notes-<date>.json`. Usually it lands in `~/Downloads`; look for the newest `~/Downloads/<plan-id>-notes-*.json` unless they give a path. They may also paste the JSON. The format is in `reference/schema.md`. Each note has `mark`, `text`, `where`, `nid`, `quote` and `anchorState`.
+Run the command with the Monitor tool, `timeout_ms` at the maximum, and the description "plan notes":
 
-Go through every note whose `status` is `open`. Skip `resolved` notes, and `answered` ones unless the user added more text since the reply.
+```
+node <skill>/scripts/live.mjs <dir>
+```
 
-| mark | meaning | what you do |
-|---|---|---|
-| `?` | question | Answer in `replies[id]`. If the answer changes the plan, change the plan too. |
-| `!` | concern or risk | Address it in the content (a flow, section or option) and reply with what changed. If you disagree, say why. |
-| `+` | idea | Fold it in, as an option, flow step or section, or reply with why not. |
-| `✓` | agree | Lock it: set `pick: true` on options, `status: "settled"` on areas, or answer the open question. A reply is optional. |
-| `✗` | cut | Remove or shrink the target. Reply saying what went. |
-| none | plain note | Treat it as context. Reply if useful. |
+- The first line is `{"type":"ready","url","open"}`. Every line after it is a note: `{"type":"note", noteId, mark, text, where, nid, quote, target, reply, …}`. Notes saved while nothing was listening come first, with `"pending": true`.
+- When the monitor expires, run the same command again. The server keeps running, and the page shows "no agent listening" in the gap.
+- If the session is busy, notes wait. The page shows them as queued.
 
-`anchorState` tells you where the note now points:
-- `ok`: still on its target.
-- `moved`: the quote was found elsewhere.
-- `changed`: the element still exists but its text was rewritten.
+For each note:
+1. Act on its mark:
+
+   | mark | meaning | what you do |
+   |---|---|---|
+   | `?` | question | Answer it. If the answer changes the plan, change the plan too. |
+   | `!` | concern or risk | Address it in the content (a flow, issue, section or option), and say what changed. If you disagree, say why. |
+   | `+` | idea | Fold it in, as an option, flow step or section, or say why not. |
+   | `✓` | agree | Lock it in: set `pick: true` on options, `status: "settled"` on areas, or answer the open question. |
+   | `✗` | cut | Remove or shrink the target, and say what went. |
+   | none | plain note | Treat it as context. A reply is optional. |
+
+2. Reply with the note's `reply` command, passing the text on stdin (`<reply> <<'EOF' … EOF`).
+   - A plain note that needs no answer still gets an empty reply (`echo "" | <reply>`). That marks it "seen".
+   - For slow work, send `--status working` first.
+   - Keep replies short and factual (see "Writing: technical facts only").
+3. Briefly say in the terminal what you did, so the user can follow along there too.
+
+**Versioning while live.** Bump `version` and `updated` once, on the first edit of a session. Set `rev` to that version on everything you add or change, because the page tags those as **Changed**. Run `verify.sh` after structural edits (new flows or diagram changes). Append one changelog entry per session.
+
+`<dir>/.live/notes.json` always holds every note in export format: mark, text, `nid`, `quote`, `anchorState` and reply. Read it to review everything at once. `anchorState` is one of:
+- `ok`: still on its target;
+- `moved`: the quote was found elsewhere;
+- `changed`: the element was rewritten;
 - `orphaned`: the target is gone.
 
-Use `quote` and `where` to see what the user pointed at, even when the target no longer exists.
+Use `quote` and `where` to see what the user pointed at.
 
-Then:
-1. Bump `PLAN.version` and `updated`.
-2. Set `rev: <new version>` on every item you added or changed (areas, flows, sections, options, questions, roadmap stages, API types and members). The page tags these as **Changed**.
-3. Write `replies[noteId] = { text, version }` for each note you respond to. Replies show inline under the user's note.
-4. Append a changelog entry that summarizes the round.
-5. Run `verify.sh` and fix any errors.
-6. In chat, give a short summary: what you answered, what changed, and any new open questions. Keep the detail in the page, not the chat. State facts only (see "Writing: technical facts only").
-
-## 3 · Small direct edits
-
-If the user asks for something like "add a flow for X" or "split area Y", edit `plan.js`, set `rev`, add a changelog line and run verify. Don't wait for an export.
-
-## 4 · Live mode (questions from the page, answered in this session)
-
-Use this when the user asks to go live, or wants to ask questions from the page. It's optional; export JSON (§2) always works.
-
-1. Start the server in the background (Bash with `run_in_background`):
-   `node <skill>/scripts/live.mjs serve <dir>`
-   Then read `<dir>/.live/server.json` and give the user its `url`. The page must be opened at that `http://127.0.0.1` URL, not from `file://`. Don't open it yourself.
-2. Watch for questions with the Monitor tool:
-   `node <skill>/scripts/live.mjs listen <dir>`, with `timeout_ms` at the maximum and a description of "plan-explorer questions".
-   When the monitor expires, re-arm it with the same command. The server keeps running, and questions asked in the meantime come out first (`"pending": true`).
-3. For each `ask` line:
-   - Answer briefly in the terminal so the user can follow along.
-   - If it's a question, reply with the answer. If it asks for a change (`!`, `+`, `✗`, `✓`, or an explicit request), edit `plan.js` following the §2 mark table, and reply with one line saying what changed. The page reloads on its own.
-   - Send the reply with the event's `reply` command (`… reply <dir> <noteId> -` with the text on stdin). For slow answers, send `--status working` first.
-   - Live edits share one version per session: bump `version` on the first edit, then set `rev` to that version on everything you touch. Add one changelog entry when the session ends.
-   - "Technical facts only" applies to replies.
-4. Stop: TaskStop the monitor and the server. Notes stay in `<dir>/.live/notes.json` (export format), so §2 works on them without an export.
-
-For agents without a live session, `serve --exec "<agent CLI>"` runs one process per question (see `reference/live.md`).
+`node <skill>/scripts/live.mjs status <dir>` shows the server, the agent and pending notes. `stop <dir>` shuts the server down.
 
 To skip the approval prompt on every reply, the user can allow `Bash(node <skill>/scripts/live.mjs:*)`.
 
+Agents without a live session use `--exec "<agent CLI>"`, which runs one process per note (see `reference/live.md`).
+
+## 3 · Direct edits
+
+If the user asks in chat for something like "add a flow for X" or "split area Y", edit `plan.js`, set `rev`, add a changelog line and run verify. Open pages reload on their own.
+
+## 4 · Offline fallback
+
+A page opened from a file (an old copied `index.html`) has no server. Its notes are exported from the Notes page as `<plan-id>-notes-<date>.json`, usually into `~/Downloads`. Work through the notes whose `status` is `open` with the §2 table. Answer in `PLAN.replies[noteId] = { text, version }`, bump `version`, set `rev`, and add a changelog entry. To get the user back online, run §2 and give them the URL.

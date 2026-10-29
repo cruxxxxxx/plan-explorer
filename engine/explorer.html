@@ -468,7 +468,7 @@ body.notemode::after { content: ""; position: fixed; inset: 0; border: 3px solid
 <script>
 (() => {
 "use strict";
-const ENGINE_VERSION = "2.1.0";
+const ENGINE_VERSION = "2.2.0";
 let P = window.PLAN;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -1209,11 +1209,11 @@ function noteCard(x) {
   return `<div class="ncard c-${m.cls}" data-note="${esc(n.id)}">
     <span class="glyph">${esc(m.key)}</span>
     <div>
-      <div class="kicker">${esc(n.anchor.label)} <span class="st st-${st}">${st}</span>${live.asking(n.id) ? `<span class="st st-asking">asking</span>` : ""}${loc.state !== "ok" ? `<span class="st st-warn" title="${esc(anchorStateHelp(loc.state))}">${loc.state}</span>` : ""}</div>
+      <div class="kicker">${esc(n.anchor.label)} <span class="st st-${st}">${st}</span>${live.badge(n.id)}${loc.state !== "ok" ? `<span class="st st-warn" title="${esc(anchorStateHelp(loc.state))}">${loc.state}</span>` : ""}</div>
       ${n.anchor.kind === "text" ? `<blockquote>${esc(trunc(n.anchor.quote, 240))}</blockquote>` : ""}
       ${n.text ? `<div class="ntext">${textHtml(n.text)}</div>` : ""}
       ${reply ? replyHtml(reply) : ""}
-      <div class="nact"><button class="lnk" data-act="goto">Go to</button>${live.on ? `<button class="lnk" data-act="ask">${live.asking(n.id) ? "Asking…" : "Ask agent"}</button>` : ""}<button class="lnk" data-act="edit">Edit</button><button class="lnk" data-act="resolve">${st === "resolved" ? "Reopen" : "Resolve"}</button><button class="lnk" data-act="delete">Delete</button></div>
+      <div class="nact"><button class="lnk" data-act="goto">Go to</button><button class="lnk" data-act="edit">Edit</button><button class="lnk" data-act="resolve">${st === "resolved" ? "Reopen" : "Resolve"}</button><button class="lnk" data-act="delete">Delete</button></div>
     </div>
   </div>`;
 }
@@ -1246,7 +1246,6 @@ function renderSide(r) {
       <p class="hint">Or <b>Alt-click</b> anything. Select text to note a phrase.</p>
       ${live.sideHtml()}
       <div class="seg">${["auto", "light", "dark"].map(t => `<button data-theme-set="${t}" class="${themePref() === t ? "on" : ""}">${t}</button>`).join("")}</div>
-      <button class="btn wide" data-act="export"><span>Export notes JSON</span><span>↓</span></button>
     </div>`;
 }
 
@@ -1889,10 +1888,9 @@ function popHtml(note, isNew) {
       ${isNew ? "" : `<button class="btn ghost" data-pop="delete">Delete</button><button class="btn ghost" data-pop="resolve">${st === "resolved" ? "Reopen" : "Resolve"}</button>`}
       <span class="grow"></span>
       <button class="btn ghost" data-pop="cancel">Cancel</button>
-      ${live.on ? `<button class="btn" data-pop="ask" title="Save and send to the agent">Ask agent</button>` : ""}
-      <button class="btn primary" data-pop="save">Save</button>
+      <button class="btn primary" data-pop="save">${live.on ? "Send" : "Save"}</button>
     </div>
-    <div class="pop-hint">⌘↵ save${live.on ? " · ⇧⌘↵ ask agent" : ""} · Esc cancel</div>`;
+    <div class="pop-hint">⌘↵ ${live.on ? "send" : "save"} · Esc cancel</div>`;
 }
 function openPop(note, isNew, x, y) {
   closePop(true);
@@ -1941,7 +1939,11 @@ function savePop() {
   const i = notes.findIndex(n => n.id === saved.id);
   if (i >= 0) { notes[i] = saved; } else { notes.push(saved); }
   notesChanged();
-  toast(isNew ? "Note saved" : "Note updated");
+  if (live.on && saved.status !== "resolved") {
+    live.ask(saved);
+  } else {
+    toast(isNew ? "Note saved" : "Note updated");
+  }
   live.flushReload();
   return saved;
 }
@@ -1958,9 +1960,6 @@ function popAction(act) {
   if (!popState) { return; }
   if (act === "save") {
     savePop();
-  } else if (act === "ask") {
-    const saved = savePop();
-    if (saved) { live.ask(saved); }
   } else if (act === "cancel") {
     closePop(false);
   } else if (act === "delete") {
@@ -2196,8 +2195,6 @@ function handleAct(act, el) {
   } else if (n && act === "edit") {
     const r = el.getBoundingClientRect();
     openPop(n, false, r.left, r.bottom);
-  } else if (n && act === "ask") {
-    live.ask(n);
   } else if (n && act === "resolve") {
     toggleResolve(n.id);
   } else if (n && act === "delete") {
@@ -2295,7 +2292,7 @@ document.addEventListener("keydown", e => {
   if (typing) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      popAction(e.shiftKey && live.on ? "ask" : "save");
+      savePop();
     }
     return;
   }
@@ -2375,8 +2372,14 @@ function buildIndex() {
 // From file:// or without a token the page stays fully offline.
 const live = (() => {
   const L = { on: false, agent: "offline", pending: new Set(), answers: {}, token: null, reloadWanted: false };
-  const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "content-type": "application/json", "x-live-token": L.token, ...(opts.headers || {}) } });
+  const api = (path, opts = {}) => fetch(path, { ...opts, headers: { "content-type": "application/json", ...(L.token ? { "x-live-token": L.token } : {}), ...(opts.headers || {}) } });
   L.asking = id => L.pending.has(id) || (L.answers[id] && L.answers[id].status === "working");
+  L.badge = id => {
+    if (!L.on) { return ""; }
+    if (L.asking(id)) { return `<span class="st st-asking">${L.agent === "offline" ? "queued" : "sent"}</span>`; }
+    const a = L.answers[id];
+    return a && a.status === "done" && !a.text ? `<span class="st st-answered">seen</span>` : "";
+  };
   L.sideHtml = () => {
     if (!L.on) { return ""; }
     const busy = [...L.pending].length;
@@ -2416,7 +2419,7 @@ const live = (() => {
     refresh();
     api("live/ask", { method: "POST", body: JSON.stringify({ note: ex, target: hit ? hit.text : "", route: location.hash, plan: P.id || null, planVersion: P.version ?? null }) })
       .then(r => r.json())
-      .then(j => toast(j.agent === "offline" ? "Queued. No agent is listening yet." : "Sent to the agent"))
+      .then(j => toast(j.agent === "offline" ? "Saved. The agent gets it when it's back." : "Sent"))
       .catch(() => toast("Couldn't reach the live server"));
   };
   L.flushReload = () => {
@@ -2451,7 +2454,7 @@ const live = (() => {
     document.head.appendChild(s);
   }
   function connect() {
-    const es = new EventSource(`live/events?t=${encodeURIComponent(L.token)}`);
+    const es = new EventSource(L.token ? `live/events?t=${encodeURIComponent(L.token)}` : "live/events");
     es.addEventListener("status", e => {
       const d = JSON.parse(e.data);
       L.agent = d.agent;
@@ -2467,6 +2470,9 @@ const live = (() => {
       if (d.status === "done" && (!was || was.status !== "done" || was.at !== d.at)) { toast("Agent replied"); }
     });
     es.addEventListener("plan", () => reloadPlan());
+    es.addEventListener("engine", () => {
+      if (!popState || !popState.dirty) { location.reload(); }
+    });
     es.onerror = () => {
       if (L.agent !== "offline") {
         L.agent = "offline";
@@ -2491,14 +2497,9 @@ const live = (() => {
   }
   L.start = () => {
     if (!/^https?:$/.test(location.protocol)) { return; }
+    // The server sets an HttpOnly cookie on the first visit (?t=…); after that the plain URL works.
     const qs = new URLSearchParams(location.search);
-    try {
-      if (qs.get("t")) { sessionStorage.setItem("pe:live-token", qs.get("t")); }
-      L.token = qs.get("t") || sessionStorage.getItem("pe:live-token");
-    } catch (e) {
-      L.token = qs.get("t");
-    }
-    if (!L.token) { return; }
+    L.token = qs.get("t") || "";
     api("live/hello").then(r => (r.ok ? r.json() : null)).then(h => {
       if (!h) { return; }
       L.on = true;

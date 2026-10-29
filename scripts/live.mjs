@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// Plan Explorer live bridge: a localhost sidecar between the page and any coding agent.
-// No dependencies. The protocol is in reference/live.md.
+// Plan Explorer live server: serves a plan folder (just plan.js) with the skill's engine,
+// and relays notes between the page and any coding agent. No dependencies.
+// Protocol: reference/live.md
 //
-//   node live.mjs serve  <dir> [--port 4848] [--exec "<agent command>"]
-//   node live.mjs listen <dir>                 # JSONL of questions on stdout (pending first, then new)
-//   node live.mjs reply  <dir> <noteId> [--status working|done] [text | -]
+//   node live.mjs <dir> [--exec "<agent cmd>"]   start or reuse the server, print the URL, then stream notes
+//   node live.mjs reply <dir> <noteId> [--status working|done] [text | -]
 //   node live.mjs status <dir>
+//   node live.mjs stop <dir>
+//   node live.mjs serve <dir> [--port N]         the server itself, in the foreground
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -14,14 +16,20 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const SELF = fileURLToPath(import.meta.url);
-const [cmd, dirArg, ...rest] = process.argv.slice(2);
+// PLAN_EXPLORER_ENGINE overrides the engine (tests inject a harness this way).
+const ENGINE = process.env.PLAN_EXPLORER_ENGINE || path.join(path.dirname(SELF), "..", "engine", "explorer.html");
 const USAGE = `usage:
-  node live.mjs serve  <dir> [--port 4848] [--exec "<agent command>"]
-  node live.mjs listen <dir>
+  node live.mjs <dir> [--exec "<agent cmd>"]
   node live.mjs reply  <dir> <noteId> [--status working|done] [text | -]
-  node live.mjs status <dir>`;
-
-if (!cmd || !dirArg) {
+  node live.mjs status <dir>
+  node live.mjs stop   <dir>
+  node live.mjs serve  <dir> [--port N]`;
+const COMMANDS = ["serve", "listen", "reply", "status", "stop"];
+const argv = process.argv.slice(2);
+const cmd = COMMANDS.includes(argv[0]) ? argv.shift() : "open";
+const dirArg = argv.shift();
+const rest = argv;
+if (!dirArg) {
   console.error(USAGE);
   process.exit(2);
 }
@@ -29,14 +37,23 @@ const DIR = path.resolve(dirArg);
 const LIVE = path.join(DIR, ".live");
 const F = {
   server: path.join(LIVE, "server.json"),
+  log: path.join(LIVE, "server.log"),
   asks: path.join(LIVE, "asks.jsonl"),
   answers: path.join(LIVE, "answers.json"),
   notes: path.join(LIVE, "notes.json"),
   notesRaw: path.join(LIVE, "notes-raw.json"),
-  listener: path.join(LIVE, "listener"),
+  listener: path.join(LIVE, "listener.json"),
   plan: path.join(DIR, "plan.js")
 };
 const LISTENER_FRESH_MS = 15000;
+// A running server is replaced when this script or the engine changes.
+const codeStamp = () => [SELF, ENGINE].map(f => {
+  try {
+    return fs.statSync(f).mtimeMs;
+  } catch (e) {
+    return 0;
+  }
+}).join(":");
 
 function flag(name, fallback) {
   const i = rest.indexOf(name);
@@ -59,6 +76,21 @@ function writeJson(file, value) {
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
+function ensureLiveDir() {
+  fs.mkdirSync(LIVE, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(LIVE, ".gitignore"), "*\n");
+}
+const log = obj => process.stdout.write(JSON.stringify(obj) + "\n");
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const pidAlive = pid => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
 function readAsks() {
   try {
     return fs.readFileSync(F.asks, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
@@ -66,7 +98,7 @@ function readAsks() {
     return [];
   }
 }
-// The newest ask per note that has no answer at or after it.
+// The newest ask per note that has no "done" answer after it.
 function pendingAsks() {
   const answers = readJson(F.answers, {});
   const latest = new Map();
@@ -78,13 +110,18 @@ function pendingAsks() {
     return !ans || ans.status !== "done" || ans.at < a.at;
   });
 }
-const listenerAlive = () => {
-  try {
-    return Date.now() - fs.statSync(F.listener).mtimeMs < LISTENER_FRESH_MS;
-  } catch (e) {
-    return false;
+function listenerState() {
+  const l = readJson(F.listener, null);
+  if (!l || !l.pid || Date.now() - l.beat > LISTENER_FRESH_MS || !pidAlive(l.pid)) {
+    return null;
   }
-};
+  return l;
+}
+// A stable port per plan folder, so the URL can be bookmarked.
+function preferredPort() {
+  const h = crypto.createHash("sha1").update(DIR).digest().readUInt16BE(0);
+  return 47100 + (h % 800);
+}
 
 // ── serve ───────────────────────────────────────────────────────────────
 function serve() {
@@ -92,15 +129,13 @@ function serve() {
     console.error(`✗ no plan.js in ${DIR}`);
     process.exit(1);
   }
-  fs.mkdirSync(LIVE, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(LIVE, ".gitignore"), "*\n");
-  const execCmd = flag("--exec", null);
-  const wantPort = Number(flag("--port", 4848));
+  ensureLiveDir();
   const prev = readJson(F.server, {});
+  const wantPort = Number(flag("--port", prev.port || preferredPort()));
   const token = prev.token || crypto.randomBytes(24).toString("base64url");
+  const stamp = codeStamp();
   const clients = new Set();
   let port = 0;
-  let execBusy = false;
 
   const send = (res, event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   const broadcast = (event, data) => {
@@ -108,17 +143,16 @@ function serve() {
       send(res, event, data);
     }
   };
-  const statusNow = () => ({
-    agent: execCmd ? "exec" : listenerAlive() ? "listening" : "offline",
-    pending: pendingAsks().map(a => a.noteId)
-  });
+  const statusNow = () => {
+    const l = listenerState();
+    return { agent: l ? l.mode : "offline", pending: pendingAsks().map(a => a.noteId) };
+  };
   let lastStatus = "";
   const pushStatus = () => {
-    const s = statusNow();
-    const k = JSON.stringify(s);
-    if (k !== lastStatus) {
-      lastStatus = k;
-      broadcast("status", s);
+    const s = JSON.stringify(statusNow());
+    if (s !== lastStatus) {
+      lastStatus = s;
+      broadcast("status", JSON.parse(s));
     }
   };
   setInterval(pushStatus, 2000).unref();
@@ -133,65 +167,28 @@ function serve() {
     return answers[noteId];
   }
 
-  // Exec adapter: one process per question, prompt on stdin, stdout streams back as the reply.
-  function pumpExec() {
-    if (!execCmd || execBusy) {
-      return;
-    }
-    const next = pendingAsks().sort((a, b) => a.at - b.at)[0];
-    if (!next) {
-      return;
-    }
-    execBusy = true;
-    saveAnswer(next.noteId, "working", "", "exec");
-    const child = spawn(execCmd, {
-      shell: true,
-      cwd: DIR,
-      env: { ...process.env, PLAN_DIR: DIR, PLAN_FILE: F.plan, PLAN_NOTE_ID: next.noteId },
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let out = "";
-    let err = "";
-    let lastPush = 0;
-    child.stdout.on("data", d => {
-      out += d;
-      if (Date.now() - lastPush > 400) {
-        lastPush = Date.now();
-        saveAnswer(next.noteId, "working", out.trim(), "exec");
-      }
-    });
-    child.stderr.on("data", d => {
-      err += d;
-    });
-    child.on("close", code => {
-      const text = out.trim() || (code ? `Agent command failed (exit ${code}): ${err.trim().slice(-400)}` : "(no answer)");
-      saveAnswer(next.noteId, "done", text, "exec");
-      execBusy = false;
-      pumpExec();
-    });
-    child.stdin.end(execPrompt(next));
-  }
-
-  // Plan file watch: poll mtime. fs.watch misses edits on macOS when editors replace the file.
-  let planMtime = 0;
-  try {
-    planMtime = fs.statSync(F.plan).mtimeMs;
-  } catch (e) {}
+  // Poll mtimes: fs.watch misses edits on macOS when editors replace the file.
+  let planMtime = fs.statSync(F.plan).mtimeMs;
   fs.watchFile(F.plan, { interval: 300 }, cur => {
     if (cur.mtimeMs && cur.mtimeMs !== planMtime) {
       planMtime = cur.mtimeMs;
       broadcast("plan", { mtime: planMtime });
-      log({ type: "plan-changed", at: Date.now() });
     }
   });
+  fs.watchFile(ENGINE, { interval: 1000 }, () => broadcast("engine", {}));
 
   const allowedHosts = () => new Set([`127.0.0.1:${port}`, `localhost:${port}`]);
-  const tokenOk = (req, url) => {
-    const given = req.headers["x-live-token"] || url.searchParams.get("t") || "";
+  const cookieName = () => `pe${port}`;
+  const cookieToken = req => {
+    const m = (req.headers.cookie || "").match(new RegExp(`(?:^|;\\s*)${cookieName()}=([^;]+)`));
+    return m ? m[1] : "";
+  };
+  const same = (given, want) => {
     const a = Buffer.from(String(given));
-    const b = Buffer.from(token);
+    const b = Buffer.from(want);
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   };
+  const tokenOk = (req, url) => [req.headers["x-live-token"], url.searchParams.get("t"), cookieToken(req)].some(t => t && same(t, token));
   const json = (res, code, body) => {
     res.writeHead(code, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
@@ -217,12 +214,27 @@ function serve() {
     });
   });
 
-  const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".woff2": "font/woff2" };
+  const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif", ".woff2": "font/woff2" };
+  function serveFile(req, res, file, headers = {}) {
+    fs.readFile(file, (e, buf) => {
+      if (e) {
+        return json(res, 404, { error: "not found" });
+      }
+      res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
+      res.end(req.method === "HEAD" ? undefined : buf);
+    });
+  }
   function serveStatic(req, res, url) {
     if (req.method !== "GET" && req.method !== "HEAD") {
       return json(res, 405, { error: "method not allowed" });
     }
-    const rel = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      // A valid ?t= on the page URL becomes a cookie, so the plain URL works from then on.
+      const t = url.searchParams.get("t");
+      const headers = t && same(t, token) ? { "set-cookie": `${cookieName()}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000` } : {};
+      return serveFile(req, res, ENGINE, headers);
+    }
+    const rel = decodeURIComponent(url.pathname);
     if (rel.split("/").some(seg => seg.startsWith("."))) {
       return json(res, 404, { error: "not found" });
     }
@@ -230,13 +242,7 @@ function serve() {
     if (!file.startsWith(DIR + path.sep)) {
       return json(res, 404, { error: "not found" });
     }
-    fs.readFile(file, (e, buf) => {
-      if (e) {
-        return json(res, 404, { error: "not found" });
-      }
-      res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-      res.end(req.method === "HEAD" ? undefined : buf);
-    });
+    return serveFile(req, res, file);
   }
 
   const server = http.createServer(async (req, res) => {
@@ -258,7 +264,7 @@ function serve() {
     try {
       const route = `${req.method} ${url.pathname}`;
       if (route === "GET /live/hello") {
-        return json(res, 200, { ok: true, plan: path.basename(DIR), ...statusNow(), answers: readJson(F.answers, {}), notes: readJson(F.notesRaw, null) });
+        return json(res, 200, { ok: true, ...statusNow(), answers: readJson(F.answers, {}), notes: readJson(F.notesRaw, null) });
       }
       if (route === "GET /live/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
@@ -290,9 +296,7 @@ function serve() {
         }
         const ask = makeAsk(body);
         fs.appendFileSync(F.asks, JSON.stringify(ask) + "\n", { mode: 0o600 });
-        log(ask);
         pushStatus();
-        pumpExec();
         return json(res, 200, { ok: true, at: ask.at, agent: statusNow().agent });
       }
       if (route === "POST /live/answer") {
@@ -312,7 +316,7 @@ function serve() {
   function makeAsk(body) {
     const n = body.note;
     return {
-      type: "ask",
+      type: "note",
       at: Date.now(),
       noteId: String(n.id),
       mark: n.mark || null,
@@ -323,7 +327,6 @@ function serve() {
       kind: n.kind || "element",
       quote: n.quote || "",
       target: String(body.target || "").slice(0, 4000),
-      route: body.route || "",
       plan: body.plan || null,
       planVersion: body.planVersion ?? null,
       planFile: F.plan,
@@ -342,60 +345,97 @@ function serve() {
     });
     server.listen(p, "127.0.0.1", () => {
       port = server.address().port;
-      const url = `http://127.0.0.1:${port}/?t=${token}`;
-      writeJson(F.server, { port, token, pid: process.pid, url, exec: execCmd, started: new Date().toISOString() });
-      log({ type: "ready", url, exec: execCmd || null, plan: F.plan });
-      pumpExec();
+      const url = `http://127.0.0.1:${port}/`;
+      writeJson(F.server, { port, token, pid: process.pid, url, first: `${url}?t=${token}`, stamp, started: new Date().toISOString() });
+      log({ type: "ready", url, first: `${url}?t=${token}` });
     });
   }
   listenOn(wantPort, wantPort === 0 ? 0 : 20);
   const stop = () => {
-    try {
-      const cur = readJson(F.server, {});
-      if (cur.pid === process.pid) {
-        writeJson(F.server, { ...cur, pid: null, stopped: new Date().toISOString() });
-      }
-    } catch (e) {}
+    const cur = readJson(F.server, {});
+    if (cur.pid === process.pid) {
+      writeJson(F.server, { ...cur, pid: null, stopped: new Date().toISOString() });
+    }
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 }
 
-function log(obj) {
-  process.stdout.write(JSON.stringify(obj) + "\n");
-}
-
-function execPrompt(ask) {
-  return `You are answering a question left on a plan page. The plan lives in ${F.plan} (window.PLAN = {...}).
-
-Note on: ${ask.where} (nid ${ask.nid})
-${ask.quote ? `Quoted text: "${ask.quote}"\n` : ""}${ask.target ? `Element text: ${ask.target}\n` : ""}Mark: ${ask.markName || "Note"} (${ask.mark || "none"})
-Question or comment: ${ask.text}
-
-Rules:
-- Answer with technical facts only. No preamble, no description of how you found the answer.
-- Keep it short: a few sentences or a short list.
-- If the note asks for a change (marks ! + ✗ ✓ or an explicit request) and you can edit files, edit ${F.plan}: keep every existing id, set rev to the plan's version on what you change, and say in one line what changed.
-- Your stdout is shown to the user as the reply.
-`;
-}
-
-// ── listen ──────────────────────────────────────────────────────────────
-function listen() {
-  fs.mkdirSync(LIVE, { recursive: true, mode: 0o700 });
-  const beat = () => {
-    const t = new Date();
-    try {
-      fs.utimesSync(F.listener, t, t);
-    } catch (e) {
-      fs.writeFileSync(F.listener, "", { mode: 0o600 });
+// ── open: ensure the server, print the URL, then listen ────────────────
+async function ensureServer(portArg) {
+  const cur = readJson(F.server, {});
+  if (cur.pid && pidAlive(cur.pid)) {
+    if (cur.stamp === codeStamp()) {
+      return cur;
     }
+    process.kill(cur.pid, "SIGTERM");
+    await sleep(300);
+  }
+  if (!fs.existsSync(F.plan)) {
+    console.error(`✗ no plan.js in ${DIR}`);
+    process.exit(1);
+  }
+  ensureLiveDir();
+  const out = fs.openSync(F.log, "a");
+  spawn(process.execPath, [SELF, "serve", DIR, ...(portArg ? ["--port", portArg] : [])], { detached: true, stdio: ["ignore", out, out] }).unref();
+  for (let i = 0; i < 100; i++) {
+    await sleep(100);
+    const s = readJson(F.server, {});
+    if (s.pid && s.pid !== cur.pid && pidAlive(s.pid)) {
+      return s;
+    }
+  }
+  console.error(`✗ server did not start; see ${F.log}`);
+  process.exit(1);
+}
+
+async function open() {
+  const portArg = flag("--port", null);
+  const execCmd = flag("--exec", null);
+  const s = await ensureServer(portArg);
+  // The first visit needs the token; the server turns it into a cookie.
+  log({ type: "ready", url: s.url, open: s.first, agent: execCmd ? "exec" : "session" });
+  listen(execCmd);
+}
+
+// One listener per plan: a newer listener takes over and the older one exits.
+function listen(execCmd) {
+  ensureLiveDir();
+  const me = { pid: process.pid, mode: execCmd ? "exec" : "listening", started: Date.now() };
+  const beat = () => {
+    const l = readJson(F.listener, null);
+    if (l && l.pid !== process.pid && l.started > me.started && pidAlive(l.pid)) {
+      process.exit(0);
+    }
+    writeJson(F.listener, { ...me, beat: Date.now() });
   };
   beat();
-  setInterval(beat, 5000);
+  setInterval(beat, 4000);
+
+  const queue = [];
+  let busy = false;
+  function pump() {
+    if (busy || !queue.length) {
+      return;
+    }
+    busy = true;
+    runExec(execCmd, queue.shift()).finally(() => {
+      busy = false;
+      pump();
+    });
+  }
+  const handle = a => {
+    if (execCmd) {
+      queue.push(a);
+      pump();
+    } else {
+      log(a);
+    }
+  };
+
   for (const a of pendingAsks()) {
-    log({ ...a, pending: true });
+    handle({ ...a, pending: true });
   }
   let offset = 0;
   try {
@@ -423,20 +463,83 @@ function listen() {
     const lines = (partial + buf.toString("utf8")).split("\n");
     partial = lines.pop();
     for (const l of lines.filter(Boolean)) {
-      process.stdout.write(l + "\n");
+      handle(JSON.parse(l));
     }
   }, 400);
   const stop = () => {
-    try {
-      fs.utimesSync(F.listener, new Date(0), new Date(0));
-    } catch (e) {}
+    const l = readJson(F.listener, null);
+    if (l && l.pid === process.pid) {
+      fs.rmSync(F.listener, { force: true });
+    }
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 }
 
-// ── reply ───────────────────────────────────────────────────────────────
+// Exec adapter: one process per note, prompt on stdin, stdout streams back as the reply.
+function runExec(execCmd, a) {
+  return new Promise(resolve => {
+    postAnswer(a.noteId, "working", "", "exec").catch(() => {});
+    const child = spawn(execCmd, {
+      shell: true,
+      cwd: DIR,
+      env: { ...process.env, PLAN_DIR: DIR, PLAN_FILE: F.plan, PLAN_NOTE_ID: a.noteId },
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let out = "";
+    let err = "";
+    let lastPush = 0;
+    child.stdout.on("data", d => {
+      out += d;
+      if (Date.now() - lastPush > 400) {
+        lastPush = Date.now();
+        postAnswer(a.noteId, "working", out.trim(), "exec").catch(() => {});
+      }
+    });
+    child.stderr.on("data", d => {
+      err += d;
+    });
+    child.on("close", code => {
+      const text = out.trim() || (code ? `Agent command failed (exit ${code}): ${err.trim().slice(-400)}` : "");
+      postAnswer(a.noteId, "done", text, "exec").catch(() => {}).finally(resolve);
+    });
+    child.stdin.on("error", () => {});
+    child.stdin.end(execPrompt(a));
+  });
+}
+
+function execPrompt(a) {
+  return `A note was left on a plan page. The plan lives in ${F.plan} (window.PLAN = {...}).
+
+Note on: ${a.where} (nid ${a.nid})
+${a.quote ? `Quoted text: "${a.quote}"\n` : ""}${a.target ? `Element text: ${a.target}\n` : ""}Mark: ${a.markName || "Note"} (${a.mark || "none"})
+Note: ${a.text}
+
+Rules:
+- ? = answer it. ! = address the concern. + = fold the idea in or say why not. ✓ = lock it in. ✗ = cut it. No mark = context; reply only if useful.
+- Technical facts only. No preamble, no description of how you found the answer. Keep it short.
+- If a change is needed and you can edit files, edit ${F.plan}: keep every existing id, set rev to the plan's version on what you change, and say in one line what changed.
+- Your stdout is shown to the user as the reply.
+`;
+}
+
+async function postAnswer(noteId, status, text, by) {
+  const s = readJson(F.server, null);
+  if (!s || !s.pid) {
+    throw new Error(`live server not running for ${DIR}`);
+  }
+  const res = await fetch(`http://127.0.0.1:${s.port}/live/answer`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-live-token": s.token },
+    body: JSON.stringify({ noteId, status, text: text || undefined, by })
+  });
+  if (!res.ok) {
+    throw new Error(`${res.status} ${await res.text()}`);
+  }
+}
+
+// ── reply / status / stop ───────────────────────────────────────────────
 async function reply() {
   const status = flag("--status", "done");
   const [noteId, ...words] = rest;
@@ -445,36 +548,34 @@ async function reply() {
     process.exit(2);
   }
   let text = words.join(" ");
-  if (text === "-" || (!text && !process.stdin.isTTY && status === "done")) {
+  if (text === "-") {
     text = fs.readFileSync(0, "utf8").trim();
   }
-  const s = readJson(F.server, null);
-  if (!s || !s.pid) {
-    console.error(`✗ live server not running for ${DIR} (start: node live.mjs serve ${dirArg})`);
-    process.exit(1);
-  }
-  const res = await fetch(`http://127.0.0.1:${s.port}/live/answer`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-live-token": s.token, host: `127.0.0.1:${s.port}` },
-    body: JSON.stringify({ noteId, status, text: text || undefined, by: process.env.PLAN_AGENT || "agent" })
-  });
-  if (!res.ok) {
-    console.error(`✗ ${res.status} ${await res.text()}`);
+  try {
+    await postAnswer(noteId, status, text, process.env.PLAN_AGENT || "agent");
+  } catch (e) {
+    console.error(`✗ ${e.message}`);
     process.exit(1);
   }
   console.log(`✓ ${status} → ${noteId}`);
 }
 
-// ── status ──────────────────────────────────────────────────────────────
 function status() {
   const s = readJson(F.server, null);
-  const pend = pendingAsks();
-  console.log(JSON.stringify({ running: !!(s && s.pid), url: s && s.pid ? s.url : null, listener: listenerAlive(), pending: pend.map(a => ({ noteId: a.noteId, text: a.text, where: a.where })) }, null, 2));
+  const running = !!(s && s.pid && pidAlive(s.pid));
+  const l = listenerState();
+  console.log(JSON.stringify({ running, url: running ? s.url : null, open: running ? s.first : null, agent: l ? l.mode : "offline", pending: pendingAsks().map(a => ({ noteId: a.noteId, text: a.text, where: a.where })) }, null, 2));
 }
 
-const COMMANDS = { serve, listen, reply, status };
-if (!COMMANDS[cmd]) {
-  console.error(USAGE);
-  process.exit(2);
+function stopCmd() {
+  const s = readJson(F.server, null);
+  if (s && s.pid && pidAlive(s.pid)) {
+    process.kill(s.pid, "SIGTERM");
+    console.log(`✓ stopped ${s.url}`);
+  } else {
+    console.log("not running");
+  }
 }
-await COMMANDS[cmd]();
+
+const RUN = { open, serve, listen: () => listen(flag("--exec", null)), reply, status, stop: stopCmd };
+await RUN[cmd]();

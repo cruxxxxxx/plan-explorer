@@ -1,7 +1,7 @@
 #!/bin/bash
-# Verifies a Plan Explorer folder: plan.js structure, then renders every flow in
-# headless Chrome and reports Mermaid errors. Never opens a visible window.
-# Usage: verify.sh <explorer-dir> [screenshot.png]
+# Verifies a plan folder: plan.js structure, then renders every flow with the skill's engine
+# in headless Chrome and reports Mermaid errors. Never opens a visible window.
+# Usage: verify.sh <plan-dir> [screenshot.png]
 set -u
 dir="${1:?usage: verify.sh <explorer-dir> [screenshot.png]}"
 dir="$(cd "$dir" && pwd)"
@@ -15,9 +15,13 @@ if [ ! -x "$chrome" ]; then
   exit 0
 fi
 
-profile="$(mktemp -d)"
-trap 'rm -rf "$profile"' EXIT
-url="file://$dir/index.html#explore"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+profile="$tmp/profile"
+mkdir -p "$tmp/site" "$profile"
+cp "$dir/plan.js" "$tmp/site/plan.js"
+cp "$here/../engine/explorer.html" "$tmp/site/index.html"
+url="file://$tmp/site/index.html#explore"
 dom="$("$chrome" --headless=new --disable-gpu --no-first-run --user-data-dir="$profile" \
   --virtual-time-budget=15000 --dump-dom "$url" 2>/dev/null)"
 
@@ -39,6 +43,6 @@ fi
 
 if [ $# -ge 2 ]; then
   "$chrome" --headless=new --disable-gpu --no-first-run --user-data-dir="$profile" \
-    --virtual-time-budget=15000 --window-size=1400,1000 --screenshot="$2" "file://$dir/index.html" >/dev/null 2>&1
+    --virtual-time-budget=15000 --window-size=1400,1000 --screenshot="$2" "file://$tmp/site/index.html" >/dev/null 2>&1
   echo "  screenshot: $2"
 fi

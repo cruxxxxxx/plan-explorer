@@ -19,15 +19,16 @@ async function until(fn, ms = 20000) {
 async function run() {
   ok("live badge shows", await until(() => !!q$("#side .live")), q$("#side .live") ? q$("#side .live").textContent : "");
   ok("token stripped from URL", !location.search.includes("t="));
+  ok("no export button in sidebar", !q$('#side [data-act="export"]'));
   location.hash = "explore/local-store";
   await wait(1500);
   const p = q$('[data-nid="areas/local-store/summary/p0"]');
   p.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true, clientX: 300, clientY: 200 }));
-  ok("popover has Ask agent", !!q$('#pop [data-pop="ask"]'));
+  ok("popover says Send", q$('#pop [data-pop="save"]').textContent === "Send");
   q$("#pop textarea").value = "? why a materialized view";
   q$("#pop textarea").dispatchEvent(new Event("input", { bubbles: true }));
-  q$('#pop [data-pop="ask"]').click();
-  ok("note saved on ask", JSON.parse(localStorage.getItem("pe:offline-sync:notes") || "[]").length === 1);
+  q$('#pop [data-pop="save"]').click();
+  ok("note saved on send", JSON.parse(localStorage.getItem("pe:offline-sync:notes") || "[]").length === 1);
   location.hash = "notes";
   ok("card shows asking", await until(() => !!q$(".ncard .st-asking")));
   ok("working reply streams in", await until(() => !!q$(".ncard .reply.working")), "");
