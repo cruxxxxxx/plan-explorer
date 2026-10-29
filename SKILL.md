@@ -64,7 +64,7 @@ Set `PLAN.kind` first, because it decides how everything pinned to a flow reads:
 | `kind` | what it is | pinned items | how they read |
 |---|---|---|---|
 | `"review"` | code review, audit, bug hunt: something that exists and may be wrong | `areas[].issues` (findings) | severity high/medium/low, origin, open → fixed |
-| `"plan"` | implementation plan, design, feature build: something to be made | `areas[].work` | type `new` · `change` · `remove` · `risk` · `decision`, status `todo` → `doing` → `done`. Neutral colours, no severity. |
+| `"plan"` | implementation plan, design, feature build: something to be made | `areas[].work` | type `new` · `change` · `remove` · `risk` · `decision`, status `todo` → `doing` → `done`, or `dropped` (kept for the record, hidden by default). Neutral colours, no severity. |
 
 - Never put severity on planned work. A plan full of red and amber dots reads like a bug report, which is a false alarm.
 - Things that might go wrong in a plan are `work` items with `type: "risk"`, using `impact` and `mitigation`.
@@ -96,7 +96,7 @@ Findings go in `areas[].issues`, never in `sections`. The engine sorts them by s
 
 **Link every issue** so it appears on the diagrams instead of in a separate list:
 - `flow`: the id of the flow in the same area where it happens. The issue is then listed under that flow.
-- `steps`: 1-based message numbers in that flow (count `A->>B:` lines from the top, skipping `%%`). Each step gets a severity dot.
+- `steps`: 1-based message numbers in that flow: every message line (`->>`, `-->>`, `->`, `-x`, `-)`, self-messages like `D->>D:`) counts as one step, top to bottom; `participant`, `note` and `%%` lines don't; a `<br>` inside a message is still one step. Each step gets a dot.
 - `types`: API type ids it touches. Types whose `source` file appears in `where` are linked automatically.
 Only fixed or wontfix issues, or issues with no fitting flow, may go without a flow. If an issue has no flow to sit on, consider adding the flow.
 
@@ -109,7 +109,7 @@ Low-value nits can share one `sections` entry ("Small cleanups") as a bullet lis
 **Retrieve or create**
 
 1. **Existing code** (`state: "existing"`): get these from the source. Copy public signatures verbatim. Take `doc` from existing doc comments (XML doc, JSDoc, docstrings, OpenAPI) where they exist; otherwise write one factual line. Set `source: "path/File.ext:line"`.
-2. **Planned changes:** `state: "new"` for proposed types or members, `"changed"` for existing ones with edits, `"removed"` for ones the plan deletes. Proposed signatures use the codebase's real conventions and types.
+2. **Planned changes:** `state: "new"` for types or members the plan adds, `"proposed"` for ones still under discussion, `"changed"` for existing ones with edits, `"removed"` for ones the plan deletes. Proposed signatures use the codebase's real conventions and types.
 3. Include only types the plan touches, plus their direct dependencies. That's usually 5–40. For a big extraction, fan out Explore subagents, one per area, each returning type, signature and doc tuples.
 4. Fill in detail in layers. Always give `summary` and every member's `sig` and `doc`. Add `body`, `detail`, `params`, `returns` and `throws` where they add information. Full detail is for decisions, not boilerplate.
 5. `dependsOn` lists type ids (drawn as edges) or free names (drawn as rounded "outside" nodes).
@@ -194,4 +194,4 @@ If the user asks in chat for something like "add a flow for X" or "split area Y"
 
 ## 4 · Offline fallback
 
-A page opened from a file (an old copied `index.html`) has no server. Its notes are exported from the Notes page as `<plan-id>-notes-<date>.json`, usually into `~/Downloads`. Work through the notes whose `status` is `open` with the §2 table. Answer in `PLAN.replies[noteId] = { text, version }`, bump `version`, set `rev`, and add a changelog entry. To get the user back online, run §2 and give them the URL.
+Only when no server is running (a page opened straight from a file, or a notes JSON the user hands you). Its notes are exported from the Notes page as `<plan-id>-notes-<date>.json`, usually into `~/Downloads`. Work through the notes whose `status` is `open` with the §2 table. Answer in `PLAN.replies[noteId] = { text, version }` (live answers in `.live/answers.json` take precedence, so never use `replies` while live), bump `version`, set `rev`, and add a changelog entry. To get the user back online, run §2 and give them the URL.

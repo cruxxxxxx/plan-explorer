@@ -2,13 +2,13 @@
 // Opens a URL in headless Chrome over the DevTools protocol and waits (real time) until
 // document.title === "DONE", then prints #results. Console errors are printed too.
 // Usage: node cdp-run.mjs <url> <profile-dir> [timeout-ms]
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 const [url, profile, timeoutArg] = process.argv.slice(2);
 const TIMEOUT = Number(timeoutArg || 60000);
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CHROME = execFileSync(new URL("../scripts/find-chrome.sh", import.meta.url).pathname, { encoding: "utf8" }).trim();
 const chrome = spawn(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"], { stdio: "ignore" });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const quit = code => {

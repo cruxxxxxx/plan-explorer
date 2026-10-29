@@ -39,6 +39,7 @@ examples/plan/        an implementation plan (work items)
 examples/review/      a code review (findings with severity)
 scripts/check.mjs     validate a plan.js
 scripts/verify.sh     validate + render every diagram in headless Chrome
+scripts/find-chrome.sh  locate Chrome/Chromium ($CHROME wins)
 scripts/live.mjs      <dir> (serve + stream notes) | reply | status | stop
 tests/                engine and live-bridge tests (headless Chrome)
 ```
@@ -50,4 +51,4 @@ tests/run-engine-test.sh   # engine interactions: review example + plan example 
 tests/live-test.sh         # live server: auth + guards, page ↔ agent round trip, restart, --exec
 ```
 
-Both need Google Chrome and network access for the Mermaid CDN.
+Both need Chrome or Chromium (found automatically, or set `CHROME=/path`) and network access for the Mermaid CDN. `verify.sh` exits 2 when no browser is found.

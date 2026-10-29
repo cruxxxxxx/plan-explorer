@@ -9,10 +9,9 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 node "$here/check.mjs" "$dir/plan.js" || exit 1
 
-chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-if [ ! -x "$chrome" ]; then
-  echo "! Chrome not found; skipped diagram render check"
-  exit 0
+if ! chrome="$("$here/find-chrome.sh")"; then
+  echo "✗ Chrome not found, so diagrams were not rendered. Set CHROME=/path/to/chrome (Chromium works too)."
+  exit 2
 fi
 
 tmp="$(mktemp -d)"

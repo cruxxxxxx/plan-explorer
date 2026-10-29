@@ -11,7 +11,7 @@
     if (t === "light" || t === "dark") { document.documentElement.dataset.theme = t; }
   } catch (e) {}
 </script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.min.js" integrity="sha384-EOXBFmc3gx5mb+vn0vPvvGqACToJD24hhacX5Yx+8NUUQrHIle/Qi5Bg9o3zKwW2" crossorigin="anonymous"></script>
 <script src="plan.js"></script>
 <style>
 :root {
@@ -511,7 +511,7 @@ body.notemode::after { content: ""; position: fixed; inset: 0; border: 3px solid
 <script>
 (() => {
 "use strict";
-const ENGINE_VERSION = "2.4.0";
+const ENGINE_VERSION = "2.4.1";
 let P = window.PLAN;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -536,6 +536,13 @@ const store = {
 const NOTES_KEY = `pe:${P.id || P.title}:notes`;
 let notes = store.get(NOTES_KEY, []);
 if (!Array.isArray(notes)) { notes = []; }
+// Deleted note ids (id → time), so a delete survives merges with other tabs and the server.
+const DELETED_KEY = `pe:${P.id || P.title}:deleted`;
+let deleted = store.get(DELETED_KEY, {});
+const markDeleted = ids => {
+  for (const id of ids) { deleted[id] = now(); }
+  store.set(DELETED_KEY, deleted);
+};
 
 // ── marks ───────────────────────────────────────────────────────────────
 const MARKS = [
@@ -547,17 +554,12 @@ const MARKS = [
 ];
 const NO_MARK = { v: "", key: "•", name: "Note", cls: "n" };
 const markOf = v => MARKS.find(m => m.v === v) || NO_MARK;
-const PREFIXES = [["?", "?"], ["!", "!"], ["+", "+"], ["✓", "✓"], ["✗", "✗"], ["ok ", "✓"], ["x ", "✗"]];
+// Only the literal mark symbols count as prefixes; words like "x coordinate" or "ok so" stay text.
+const PREFIXES = ["?", "!", "+", "✓", "✗"];
 function parsePrefix(text) {
   const t = text.trimStart();
-  for (const [p, m] of PREFIXES) {
-    if (p.length > 1) {
-      if (t.toLowerCase().startsWith(p)) { return { mark: m, rest: t.slice(p.length).trim() }; }
-    } else if (t[0] === p && (t.length === 1 || /\s/.test(t[1]))) {
-      return { mark: m, rest: t.slice(1).trim() };
-    }
-  }
-  return null;
+  const p = PREFIXES.find(p => t[0] === p && (t.length === 1 || /\s/.test(t[1])));
+  return p ? { mark: p, rest: t.slice(1).trim() } : null;
 }
 
 // ── tiny markdown ───────────────────────────────────────────────────────
@@ -567,8 +569,10 @@ function inline(s) {
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
-    .replace(MD_LINK, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(MD_LINK, (m, text, href) => (safeHref(href) ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${text}</a>` : text));
 }
+// Plan text and agent replies are untrusted: links may only be web, mail, in-page or relative.
+const safeHref = h => /^(https?:|mailto:|#|\/|\.{0,2}\/|[\w.-]+(\/|$|#|\?))/i.test(h) && !/^\s*(javascript|data|vbscript|file):/i.test(h);
 function plain(s) {
   return norm(String(s ?? "")
     .replace(/`([^`]+)`/g, "$1")
@@ -799,7 +803,7 @@ function flowCard(a, f) {
   FLOWS.set(b, { kind: "seq", src: f.mermaid || "", parsed, label, title: f.title, a, f });
   parsed.actors.forEach(ac => reg(`${b}/actor/${ac.id}`, `${label} › ${ac.display}`, ac.display));
   parsed.msgs.forEach((m, k) => reg(`${b}/msg/${k}`, `${label} › step ${k + 1}: ${m.from} → ${m.to}: ${m.text}`, m.text));
-  parsed.notes.forEach((t, k) => reg(`${b}/note/${k}`, `${label} › note ${k + 1}`, t));
+  parsed.notes.forEach((t, k) => reg(`${b}/note/${k}`, `${label} › note ${k + 1}`, t.text));
   return `<figure class="flow"${reg(b, `${label} (whole flow)`, f.title)}>
     <div class="flow-head"><h3>${esc(f.title)}</h3><span class="kicker">${chg(f)}</span></div>
     <div class="canvas" data-flow="${esc(b)}"><span class="muted">Rendering…</span></div>
@@ -1330,7 +1334,7 @@ function viewNotes() {
   return `
   <div class="kicker"><span class="sq"></span>Notes · ${all.length}</div>
   <h1>Notes</h1>
-  <p class="lede-s">Saved in this browser only. <b>Export JSON</b> and give the file to Claude. It answers your questions and revises the plan, and its replies show up under your notes.</p>
+  <p class="lede-s">${live.on ? "Each note goes to the agent when you save it. Replies show up under your notes, and the page updates as the plan changes." : "Saved in this browser only. <b>Export JSON</b> and give the file to the agent. Its replies show up under your notes."}</p>
   <div class="toolbar">
     <button class="btn primary" data-act="export">Export JSON</button>
     <button class="btn" data-act="copy">Copy JSON</button>
@@ -1392,6 +1396,17 @@ function renderSide(r) {
 }
 
 // ── mermaid ─────────────────────────────────────────────────────────────
+// Mermaid draws one <text> per <br>-separated line, so steps map to groups of lines.
+const brLines = s => (String(s).match(/<br\s*\/?>/gi) || []).length + 1;
+function groupLines(els, items) {
+  const out = [];
+  let i = 0;
+  for (const it of items) {
+    out.push(els.slice(i, i + (it.lines || 1)));
+    i += it.lines || 1;
+  }
+  return out;
+}
 function parseSeq(src) {
   const out = { actors: [], msgs: [], notes: [], byDisplay: {} };
   const seen = new Set();
@@ -1413,11 +1428,11 @@ function parseSeq(src) {
     if ((m = l.match(/^(?:create\s+)?(?:participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/i))) {
       add(m[1], m[2]);
     } else if ((m = l.match(/^note\s+(?:left of|right of|over)\s+[^:]+:\s*(.*)$/i))) {
-      out.notes.push(clean(m[1]));
+      out.notes.push({ text: clean(m[1]), lines: brLines(m[1]) });
     } else if ((m = l.match(/^(.+?)\s*(<<-{1,2}>>|-{1,2}(?:>>|>|x|\)))\s*[+-]?\s*(.+?)\s*:\s*(.*)$/))) {
       add(m[1]);
       add(m[3]);
-      out.msgs.push({ from: m[1].trim(), to: m[3].trim(), text: clean(m[4]) });
+      out.msgs.push({ from: m[1].trim(), to: m[3].trim(), text: clean(m[4]), lines: brLines(m[4]) });
     }
   }
   return out;
@@ -1521,15 +1536,15 @@ function stampSeq(c, b, f) {
   const set = (el, nid) => {
     if (INDEX.has(nid)) { el.setAttribute("data-nid", nid); }
   };
-  const texts = $$("text.messageText", c);
-  texts.forEach((el, k) => set(el, `${b}/msg/${k}`));
+  const steps = groupLines($$("text.messageText", c), f.parsed.msgs);
+  steps.forEach((els, k) => els.forEach(el => set(el, `${b}/msg/${k}`)));
   $$(".messageLine0, .messageLine1", c).forEach((el, k) => set(el, `${b}/msg/${k}`));
   $$("rect.actor[name]", c).forEach(el => set(el, `${b}/actor/${el.getAttribute("name")}`));
   $$("text.actor", c).forEach(el => {
     const d = norm(el.textContent);
     set(el, `${b}/actor/${f.parsed.byDisplay[d] || d}`);
   });
-  $$("text.noteText", c).forEach((el, k) => set(el, `${b}/note/${k}`));
+  groupLines($$("text.noteText", c), f.parsed.notes).forEach((els, k) => els.forEach(el => set(el, `${b}/note/${k}`)));
   if (!f.a) { return; }
   for (const ac of f.parsed.actors) {
     const t = typeForActor(f.f, ac);
@@ -1539,9 +1554,10 @@ function stampSeq(c, b, f) {
       el.setAttribute("data-type", t.id);
     });
   }
-  texts.forEach((el, k) => {
+  steps.forEach((els, k) => {
     const list = issuesAtStep(f.a, f.f, k);
-    if (!list.length) { return; }
+    if (!list.length || !els.length) { return; }
+    const el = els[els.length - 1];
     const bb = el.getBBox();
     const g = document.createElementNS(SVGNS, "g");
     g.setAttribute("class", `stepdot ${toneOf(list[0])}`);
@@ -2132,6 +2148,7 @@ function notesChanged() {
   }
 }
 function removeNote(id) {
+  markDeleted([id]);
   notes = notes.filter(n => n.id !== id);
   notesChanged();
   toast("Note deleted");
@@ -2278,7 +2295,8 @@ function importNotes(file) {
 }
 function clearNotes() {
   if (!notes.length) { return; }
-  if (!confirm(`Delete all ${notes.length} notes from this browser? Export first if you want to keep them.`)) { return; }
+  if (!confirm(`Delete all ${notes.length} notes? Export first if you want to keep them.`)) { return; }
+  markDeleted(notes.map(n => n.id));
   notes = [];
   notesChanged();
 }
@@ -2567,9 +2585,32 @@ const live = (() => {
     if (!L.on) { return; }
     clearTimeout(syncTimer);
     syncTimer = setTimeout(() => {
-      api("live/notes", { method: "PUT", body: JSON.stringify({ raw: notes, export: exportPayload() }) }).catch(() => {});
+      api("live/notes", { method: "PUT", body: JSON.stringify({ raw: notes, deleted, export: exportPayload() }) })
+        .then(r => r.json())
+        .then(j => {
+          if (adopt(j.notes, j.deleted)) {
+            refresh();
+            L.syncNotes();
+          }
+        })
+        .catch(() => {});
     }, 300);
   };
+  // Take the server's merged view. Returns true when it differs from what this tab had.
+  function adopt(remote, remoteDeleted) {
+    if (!Array.isArray(remote)) { return false; }
+    Object.assign(deleted, remoteDeleted || {});
+    store.set(DELETED_KEY, deleted);
+    const before = JSON.stringify(notes);
+    const byId = new Map(notes.map(n => [n.id, n]));
+    for (const r of remote) {
+      const n = byId.get(r.id);
+      if (!n || (r.updated || "") > (n.updated || "")) { byId.set(r.id, r); }
+    }
+    notes = [...byId.values()].filter(n => !deleted[n.id]);
+    store.set(NOTES_KEY, notes);
+    return JSON.stringify(notes) !== before;
+  }
   L.ask = n => {
     if (!L.on) { return; }
     const ex = noteExport(n);
@@ -2596,7 +2637,11 @@ const live = (() => {
     s.src = `plan.js?v=${Date.now()}`;
     s.onload = () => {
       s.remove();
-      if (!window.PLAN) { return; }
+      if (!window.PLAN) {
+        window.PLAN = P;
+        toast("plan.js has an error. Keeping the last good version.");
+        return;
+      }
       const before = P.version;
       P = window.PLAN;
       document.title = P.title || "Plan Explorer";
@@ -2629,52 +2674,72 @@ const live = (() => {
       refresh();
       if (d.status === "done" && (!was || was.status !== "done" || was.at !== d.at)) { toast("Agent replied"); }
     });
-    es.addEventListener("plan", () => reloadPlan());
+    es.addEventListener("plan", e => {
+      L.planMtime = JSON.parse(e.data).mtime;
+      reloadPlan();
+    });
     es.addEventListener("engine", () => {
       if (!popState || !popState.dirty) { location.reload(); }
     });
+    let dropped = false;
     es.onerror = () => {
+      dropped = true;
       if (L.agent !== "offline") {
         L.agent = "offline";
         refresh();
       }
     };
+    // After a gap, catch up on whatever was sent while disconnected.
+    es.onopen = () => {
+      if (!dropped) { return; }
+      dropped = false;
+      hello().then(h => {
+        if (!h) { return; }
+        if (h.planMtime && h.planMtime !== L.planMtime) { reloadPlan(); }
+        refresh();
+      });
+    };
   }
-  function mergeNotes(remote) {
-    if (!Array.isArray(remote)) { return false; }
-    const byId = new Map(remote.map(n => [n.id, n]));
-    let changed = false;
-    for (const n of notes) {
-      const r = byId.get(n.id);
-      if (!r || (n.updated || "") > (r.updated || "")) {
-        byId.set(n.id, n);
-        changed = true;
-      }
-    }
-    notes = [...byId.values()];
-    store.set(NOTES_KEY, notes);
-    return changed;
+  function hello() {
+    return api("live/hello").then(r => (r.ok ? r.json() : null)).then(h => {
+      if (!h) { return null; }
+      L.agent = h.agent;
+      L.pending = new Set(h.pending || []);
+      L.answers = h.answers || {};
+      L.planMtime = h.planMtime;
+      adopt(h.notes || [], h.deleted);
+      return h;
+    }).catch(() => null);
   }
   L.start = () => {
     if (!/^https?:$/.test(location.protocol)) { return; }
     // The server sets an HttpOnly cookie on the first visit (?t=…); after that the plain URL works.
     const qs = new URLSearchParams(location.search);
     L.token = qs.get("t") || "";
-    api("live/hello").then(r => (r.ok ? r.json() : null)).then(h => {
+    hello().then(h => {
       if (!h) { return; }
       L.on = true;
-      L.agent = h.agent;
-      L.pending = new Set(h.pending || []);
-      L.answers = h.answers || {};
-      const localNewer = mergeNotes(h.notes);
-      if (localNewer || !h.notes) { L.syncNotes(); }
+      L.syncNotes();
       if (qs.get("t")) { history.replaceState(null, "", location.pathname + location.hash); }
       connect();
       render(false, scrollY);
-    }).catch(() => {});
+    });
   };
+  L.refresh = refresh;
   return L;
 })();
+
+// Another tab changed notes: take its copy, so neither tab overwrites the other.
+addEventListener("storage", e => {
+  if (e.key === NOTES_KEY || e.key === DELETED_KEY) {
+    deleted = store.get(DELETED_KEY, {});
+    notes = store.get(NOTES_KEY, []).filter(n => !deleted[n.id]);
+    if (readRoute().view === "notes") { render(false, scrollY); } else { renderSide(readRoute()); applyAnchors(); }
+  }
+});
+
+// Pure helpers, reachable from the engine tests.
+window.planExplorer = Object.freeze({ version: ENGINE_VERSION, parsePrefix, inline });
 
 buildIndex();
 live.start();

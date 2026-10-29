@@ -47,6 +47,22 @@ async function run() {
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   ok("sidebar count title", /open work/.test(q$("#side .cnt").getAttribute("title") || ""));
 
+  // ── <br> in a message: Mermaid draws two lines, still one step ──
+  const unsynced = q$$("text.messageText").find(t => t.textContent === "read unsynced ops");
+  ok("<br> keeps later steps aligned", !!unsynced && /\/msg\/1$/.test(unsynced.getAttribute("data-nid") || ""), unsynced && unsynced.getAttribute("data-nid"));
+  ok("<br> lines share one step", q$$("text.messageText").filter(t => /^(load snapshot|\(note_view\))$/.test(t.textContent)).every(t => /\/msg\/0$/.test(t.getAttribute("data-nid") || "")));
+
+  // ── note prefixes: only the literal mark symbols ──
+  const { parsePrefix, inline } = window.planExplorer;
+  ok("prefix ? parsed", parsePrefix("? why sqlite").mark === "?");
+  ok("prefix needs a space", parsePrefix("?why") === null);
+  ok("words are not prefixes", parsePrefix("x coordinate is off") === null && parsePrefix("ok so") === null);
+
+  // ── links in plan text and replies ──
+  const a = h => inline(`[t](${h})`);
+  ok("web links kept", /href="https:\/\/x\.dev"/.test(a("https://x.dev")) && /href="docs\/a\.md"/.test(a("docs/a.md")) && /href="#api"/.test(a("#api")));
+  ok("script links dropped", !/href/.test(a("javascript:alert(1)")) && !/href/.test(a("JaVaScRiPt:alert(1)")) && !/href/.test(a("data:text/html,x")) && !/href/.test(a("vbscript:x")));
+
   // ── API tree on deep paths ──
   window.PLAN.api.types.push(
     { id: "deep-a", name: "CellLogicRunner", kind: "class", source: "src/game/grid/cells/logic/runtime/CellLogicRunner.ts", summary: "x", members: [] },

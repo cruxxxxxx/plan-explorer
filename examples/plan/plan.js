@@ -46,7 +46,7 @@ window.PLAN = {
   participant App
   participant Log as Op log
   participant View as Note view
-  App->>View: load snapshot
+  App->>View: load snapshot<br/>(note_view)
   App->>Log: read unsynced ops
   Log->>View: apply each op
   View-->>App: ready`,

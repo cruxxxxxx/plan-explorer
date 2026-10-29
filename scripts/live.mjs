@@ -42,10 +42,17 @@ const F = {
   answers: path.join(LIVE, "answers.json"),
   notes: path.join(LIVE, "notes.json"),
   notesRaw: path.join(LIVE, "notes-raw.json"),
+  deleted: path.join(LIVE, "deleted.json"),
+  lock: path.join(LIVE, "spawn.lock"),
   listener: path.join(LIVE, "listener.json"),
   plan: path.join(DIR, "plan.js")
 };
 const LISTENER_FRESH_MS = 15000;
+// A server with no open page and no listener for this long shuts itself down.
+const IDLE_MS = 6 * 60 * 60 * 1000;
+// Single-quote for POSIX shells: the agent runs the reply command as given.
+const shq = v => `'${String(v).replace(/'/g, "'\\''")}'`;
+const NOTE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 // A running server is replaced when this script or the engine changes.
 const codeStamp = () => [SELF, ENGINE].map(f => {
   try {
@@ -215,12 +222,20 @@ function serve() {
   });
 
   const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif", ".woff2": "font/woff2" };
+  const SECURITY = {
+    "x-content-type-options": "nosniff",
+    "cross-origin-resource-policy": "same-origin",
+    "referrer-policy": "no-referrer",
+    "x-frame-options": "DENY"
+  };
+  // The page runs inline engine code and Mermaid from jsDelivr (pinned + SRI); nothing else may load or connect.
+  const CSP = "default-src 'none'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
   function serveFile(req, res, file, headers = {}) {
     fs.readFile(file, (e, buf) => {
       if (e) {
         return json(res, 404, { error: "not found" });
       }
-      res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
+      res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream", "cache-control": "no-store", ...SECURITY, ...headers });
       res.end(req.method === "HEAD" ? undefined : buf);
     });
   }
@@ -232,9 +247,18 @@ function serve() {
       // A valid ?t= on the page URL becomes a cookie, so the plain URL works from then on.
       const t = url.searchParams.get("t");
       const headers = t && same(t, token) ? { "set-cookie": `${cookieName()}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000` } : {};
-      return serveFile(req, res, ENGINE, headers);
+      return serveFile(req, res, ENGINE, { ...headers, "content-security-policy": CSP });
     }
-    const rel = decodeURIComponent(url.pathname);
+    // Everything but the engine page is plan data: same auth as the API.
+    if (!tokenOk(req, url)) {
+      return json(res, 401, { error: "missing or wrong token" });
+    }
+    let rel;
+    try {
+      rel = decodeURIComponent(url.pathname);
+    } catch (e) {
+      return json(res, 400, { error: "bad path" });
+    }
     if (rel.split("/").some(seg => seg.startsWith("."))) {
       return json(res, 404, { error: "not found" });
     }
@@ -245,8 +269,25 @@ function serve() {
     return serveFile(req, res, file);
   }
 
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url, "http://localhost");
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch(e => {
+      console.error(`request failed: ${e && e.stack || e}`);
+      if (!res.headersSent) {
+        json(res, 500, { error: "internal error" });
+      } else {
+        res.end();
+      }
+    });
+  });
+  process.on("uncaughtException", e => console.error(`uncaught: ${e && e.stack || e}`));
+  process.on("unhandledRejection", e => console.error(`unhandled: ${e && e.stack || e}`));
+  async function handle(req, res) {
+    let url;
+    try {
+      url = new URL(req.url, "http://localhost");
+    } catch (e) {
+      return json(res, 400, { error: "bad url" });
+    }
     // DNS-rebinding and cross-site guard: only our own host and origin.
     if (!allowedHosts().has(req.headers.host)) {
       return json(res, 403, { error: "bad host" });
@@ -264,7 +305,11 @@ function serve() {
     try {
       const route = `${req.method} ${url.pathname}`;
       if (route === "GET /live/hello") {
-        return json(res, 200, { ok: true, ...statusNow(), answers: readJson(F.answers, {}), notes: readJson(F.notesRaw, null) });
+        return json(res, 200, { ok: true, pid: process.pid, stamp, planMtime, ...statusNow(), answers: readJson(F.answers, {}), notes: readJson(F.notesRaw, []), deleted: readJson(F.deleted, {}) });
+      }
+      if (route === "POST /live/stop") {
+        json(res, 200, { ok: true });
+        return shutdown();
       }
       if (route === "GET /live/events") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
@@ -283,16 +328,29 @@ function serve() {
         if (!Array.isArray(body.raw)) {
           return json(res, 400, { error: "raw must be an array" });
         }
-        writeJson(F.notesRaw, body.raw);
-        if (body.export) {
+        // Merge per note: newest `updated` wins, deletions are kept as tombstones.
+        const dead = { ...readJson(F.deleted, {}), ...(body.deleted && typeof body.deleted === "object" ? body.deleted : {}) };
+        const byId = new Map(readJson(F.notesRaw, []).map(n => [n.id, n]));
+        for (const n of body.raw) {
+          const cur = byId.get(n && n.id);
+          if (n && n.id && (!cur || String(n.updated || "") > String(cur.updated || ""))) {
+            byId.set(n.id, n);
+          }
+        }
+        const merged = [...byId.values()].filter(n => !dead[n.id]);
+        writeJson(F.deleted, dead);
+        writeJson(F.notesRaw, merged);
+        // The export view is only current when this client already had the merged set.
+        const sameSet = merged.length === body.raw.filter(n => !dead[n.id]).length && merged.every(n => body.raw.some(r => r.id === n.id && r.updated === n.updated));
+        if (body.export && sameSet) {
           writeJson(F.notes, body.export);
         }
-        return json(res, 200, { ok: true });
+        return json(res, 200, { ok: true, notes: merged, deleted: dead });
       }
       if (route === "POST /live/ask") {
         const body = await readBody(req);
-        if (!body.note || !body.note.id) {
-          return json(res, 400, { error: "note.id required" });
+        if (!body.note || !NOTE_ID.test(String(body.note.id || ""))) {
+          return json(res, 400, { error: "note.id required ([A-Za-z0-9_-])" });
         }
         const ask = makeAsk(body);
         fs.appendFileSync(F.asks, JSON.stringify(ask) + "\n", { mode: 0o600 });
@@ -301,8 +359,8 @@ function serve() {
       }
       if (route === "POST /live/answer") {
         const body = await readBody(req);
-        if (!body.noteId) {
-          return json(res, 400, { error: "noteId required" });
+        if (!NOTE_ID.test(String(body.noteId || ""))) {
+          return json(res, 400, { error: "noteId required ([A-Za-z0-9_-])" });
         }
         const status = body.status === "working" ? "working" : "done";
         return json(res, 200, { ok: true, answer: saveAnswer(String(body.noteId), status, body.text, body.by) });
@@ -311,7 +369,7 @@ function serve() {
     } catch (e) {
       return json(res, 400, { error: String(e.message || e) });
     }
-  });
+  }
 
   function makeAsk(body) {
     const n = body.note;
@@ -330,7 +388,7 @@ function serve() {
       plan: body.plan || null,
       planVersion: body.planVersion ?? null,
       planFile: F.plan,
-      reply: `node ${JSON.stringify(SELF)} reply ${JSON.stringify(DIR)} ${n.id} -`
+      reply: `node ${shq(SELF)} reply ${shq(DIR)} ${shq(n.id)} -`
     };
   }
 
@@ -351,43 +409,104 @@ function serve() {
     });
   }
   listenOn(wantPort, wantPort === 0 ? 0 : 20);
-  const stop = () => {
+  // Release the port before exiting, so a restart can bind the same one (stable URL and cookie).
+  function shutdown() {
     const cur = readJson(F.server, {});
     if (cur.pid === process.pid) {
       writeJson(F.server, { ...cur, pid: null, stopped: new Date().toISOString() });
     }
-    process.exit(0);
-  };
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+    for (const c of clients) {
+      c.end();
+    }
+    server.close(() => process.exit(0));
+    server.closeAllConnections?.();
+    setTimeout(() => process.exit(0), 1500).unref();
+  }
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  let idleSince = Date.now();
+  setInterval(() => {
+    if (clients.size || listenerState()) {
+      idleSince = Date.now();
+    } else if (Date.now() - idleSince > IDLE_MS) {
+      shutdown();
+    }
+  }, 60000).unref();
 }
 
 // ── open: ensure the server, print the URL, then listen ────────────────
+// A server counts as ours only if it answers on its port with its token and pid.
+// (A bare pid check could hit an unrelated process after a reboot.)
+async function health(s) {
+  if (!s || !s.port || !s.token) {
+    return null;
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${s.port}/live/hello`, { headers: { "x-live-token": s.token }, signal: AbortSignal.timeout(1000) });
+    const h = res.ok ? await res.json() : null;
+    return h && h.pid === s.pid ? h : null;
+  } catch (e) {
+    return null;
+  }
+}
+async function stopServer(s) {
+  try {
+    await fetch(`http://127.0.0.1:${s.port}/live/stop`, { method: "POST", headers: { "x-live-token": s.token }, signal: AbortSignal.timeout(1000) });
+  } catch (e) {}
+  for (let i = 0; i < 40 && await health(s); i++) {
+    await sleep(100);
+  }
+}
+// One spawner at a time per plan folder.
+async function withLock(fn) {
+  ensureLiveDir();
+  for (let i = 0; ; i++) {
+    try {
+      fs.closeSync(fs.openSync(F.lock, "wx"));
+      break;
+    } catch (e) {
+      const age = Date.now() - (fs.statSync(F.lock, { throwIfNoEntry: false })?.mtimeMs || 0);
+      if (age > 15000) {
+        fs.rmSync(F.lock, { force: true });
+      } else if (i > 150) {
+        throw new Error(`another live.mjs is starting this plan (${F.lock})`);
+      } else {
+        await sleep(100);
+      }
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync(F.lock, { force: true });
+  }
+}
 async function ensureServer(portArg) {
-  const cur = readJson(F.server, {});
-  if (cur.pid && pidAlive(cur.pid)) {
-    if (cur.stamp === codeStamp()) {
+  return withLock(async () => {
+    const cur = readJson(F.server, {});
+    const h = await health(cur);
+    if (h && cur.stamp === codeStamp()) {
       return cur;
     }
-    process.kill(cur.pid, "SIGTERM");
-    await sleep(300);
-  }
-  if (!fs.existsSync(F.plan)) {
-    console.error(`✗ no plan.js in ${DIR}`);
-    process.exit(1);
-  }
-  ensureLiveDir();
-  const out = fs.openSync(F.log, "a");
-  spawn(process.execPath, [SELF, "serve", DIR, ...(portArg ? ["--port", portArg] : [])], { detached: true, stdio: ["ignore", out, out] }).unref();
-  for (let i = 0; i < 100; i++) {
-    await sleep(100);
-    const s = readJson(F.server, {});
-    if (s.pid && s.pid !== cur.pid && pidAlive(s.pid)) {
-      return s;
+    if (h) {
+      await stopServer(cur);
     }
-  }
-  console.error(`✗ server did not start; see ${F.log}`);
-  process.exit(1);
+    if (!fs.existsSync(F.plan)) {
+      console.error(`✗ no plan.js in ${DIR}`);
+      process.exit(1);
+    }
+    const out = fs.openSync(F.log, "a");
+    spawn(process.execPath, [SELF, "serve", DIR, ...(portArg ? ["--port", portArg] : [])], { detached: true, stdio: ["ignore", out, out] }).unref();
+    for (let i = 0; i < 100; i++) {
+      await sleep(100);
+      const s = readJson(F.server, {});
+      if (s.pid && s.pid !== cur.pid && await health(s)) {
+        return s;
+      }
+    }
+    console.error(`✗ server did not start; see ${F.log}`);
+    process.exit(1);
+  });
 }
 
 async function open() {
@@ -560,17 +679,17 @@ async function reply() {
   console.log(`✓ ${status} → ${noteId}`);
 }
 
-function status() {
+async function status() {
   const s = readJson(F.server, null);
-  const running = !!(s && s.pid && pidAlive(s.pid));
+  const running = !!(await health(s));
   const l = listenerState();
   console.log(JSON.stringify({ running, url: running ? s.url : null, open: running ? s.first : null, agent: l ? l.mode : "offline", pending: pendingAsks().map(a => ({ noteId: a.noteId, text: a.text, where: a.where })) }, null, 2));
 }
 
-function stopCmd() {
+async function stopCmd() {
   const s = readJson(F.server, null);
-  if (s && s.pid && pidAlive(s.pid)) {
-    process.kill(s.pid, "SIGTERM");
+  if (await health(s)) {
+    await stopServer(s);
     console.log(`✓ stopped ${s.url}`);
   } else {
     console.log("not running");

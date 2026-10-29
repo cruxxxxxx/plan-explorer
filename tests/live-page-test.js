@@ -19,6 +19,7 @@ async function until(fn, ms = 20000) {
 async function run() {
   ok("live badge shows", await until(() => !!q$("#side .live")), q$("#side .live") ? q$("#side .live").textContent : "");
   ok("token stripped from URL", !location.search.includes("t="));
+  ok("diagrams render under the CSP", await until(() => !!document.querySelector("svg text.messageText")));
   ok("no export button in sidebar", !q$('#side [data-act="export"]'));
   location.hash = "explore/local-store";
   await wait(1500);

@@ -4,13 +4,14 @@
 set -u
 S="$(cd "$(dirname "$0")/.." && pwd)"
 LIVE="$S/scripts/live.mjs"
-tmp="$(mktemp -d)"
+tmp="$(mktemp -d)/it's a dir"
+mkdir -p "$tmp"
 pids=()
 cleanup() {
   for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done
   node "$LIVE" stop "$tmp/site" > /dev/null 2>&1
   node "$LIVE" stop "$tmp/ex" > /dev/null 2>&1
-  rm -rf "$tmp"
+  rm -rf "$(dirname "$tmp")"
 }
 trap cleanup EXIT
 fails=0
@@ -47,8 +48,24 @@ check "cookie authenticates" "$(code -H "Cookie: $cookie" "$base/live/hello")" 2
 check "no cookie without token" "$(curl -s -D - -o /dev/null "$base/" | grep -ci 'set-cookie')" 0
 check "foreign Host rejected (DNS rebinding)" "$(code -H 'Host: evil.example:80' -H "Cookie: $cookie" "$base/live/hello")" 403
 check "foreign Origin rejected" "$(code -H 'Origin: http://evil.example' -H "Cookie: $cookie" "$base/live/hello")" 403
-check "dotfiles hidden (.live/server.json)" "$(code "$base/.live/server.json")" 404
-check "path traversal blocked" "$(code --path-as-is "$base/../../etc/passwd")" 404
+check "dotfiles hidden (.live/server.json)" "$(code -H "Cookie: $cookie" "$base/.live/server.json")" 404
+check "path traversal blocked" "$(code -H "Cookie: $cookie" --path-as-is "$base/../../etc/passwd")" 404
+check "plan.js needs token" "$(code "$base/plan.js")" 401
+check "plan.js with cookie" "$(code -H "Cookie: $cookie" "$base/plan.js")" 200
+check "malformed URL is a 400, server survives" "$(code -H "Cookie: $cookie" "$base/%E0%A4%A")" 400
+check "server still up after bad URL" "$(code -H "x-live-token: $token" "$base/live/hello")" 200
+check "engine page has CSP" "$(curl -s -D - -o /dev/null "$base/" | grep -ci "content-security-policy:.*frame-ancestors 'none'")" 1
+check "bad noteId rejected" "$(code -X POST -H "x-live-token: $token" -H 'content-type: application/json' --data '{"noteId":"a;rm -rf ~","status":"done","text":"x"}' "$base/live/answer")" 400
+# Notes merge per id (newest wins) and deletions stick, whatever order clients write in.
+put() { curl -s -X PUT -H "x-live-token: $token" -H 'content-type: application/json' --data "$1" "$base/live/notes"; }
+put '{"raw":[{"id":"m1","text":"old","updated":"2026-01-01"},{"id":"m2","text":"keep","updated":"2026-01-01"}]}' > /dev/null
+merged="$(put '{"raw":[{"id":"m1","text":"new","updated":"2026-02-01"}],"deleted":{"m2":"2026-02-01"}}')"
+check "notes merge: newest wins" "$(printf '%s' "$merged" | grep -c '"text":"new"')" 1
+check "notes merge: tombstone removes" "$(printf '%s' "$merged" | grep -c '"m2"')" 1
+check "notes merge: deleted note gone from list" "$(printf '%s' "$merged" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).notes.map(n=>n.id).join(",")))')" "m1"
+stale="$(put '{"raw":[{"id":"m1","text":"older","updated":"2026-01-15"},{"id":"m2","text":"zombie","updated":"2026-03-01"}]}')"
+check "notes merge: stale write loses, deleted stays deleted" "$(printf '%s' "$stale" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.notes.map(n=>n.id+":"+n.text).join(","))})')" "m1:new"
+put '{"raw":[],"deleted":{"m1":"2026-04-01"}}' > /dev/null
 
 # ── page ↔ agent round trip ──
 node "$S/tests/cdp-run.mjs" "$base/?t=$token" "$tmp/profile" 45000 > "$tmp/results.txt" 2>&1 &
@@ -63,10 +80,12 @@ check "status: agent listening" "$(node "$LIVE" status "$tmp/site" | grep -c '"a
 sleep 1
 node "$LIVE" reply "$tmp/site" "$note" --status working "Checking the view code" > /dev/null
 sleep 1.5
-echo "Reads stay local: the view is rebuilt from the op log." | node "$LIVE" reply "$tmp/site" "$note" - > /dev/null
+# The note's own reply command must survive a folder path with spaces and quotes.
+replycmd=$(printf '%s' "$ask" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).reply))')
+echo "Reads stay local: the view is rebuilt from the op log." | sh -c "$replycmd" > /dev/null
 check "answer persisted" "$(grep -c 'Reads stay local' "$tmp/site/.live/answers.json")" 1
 sleep 1
-sed -i '' 's/version: 2,/version: 3,/; s/Every edit lands in a local SQLite op log first./LIVE-EDIT. Every edit lands in a local SQLite op log first./' "$tmp/site/plan.js"
+sed 's/version: 2,/version: 3,/; s/Every edit lands in a local SQLite op log first./LIVE-EDIT. Every edit lands in a local SQLite op log first./' "$tmp/site/plan.js" > "$tmp/plan.next" && cat "$tmp/plan.next" > "$tmp/site/plan.js"
 wait "$chrome"
 results="$(cat "$tmp/results.txt")"
 echo "$results"

@@ -51,7 +51,7 @@ window.PLAN = {
       where: ["Clock/SongClock.cs:145-168"],
       origin: "introduced",       // introduced | pre-existing
       flow: "reconnect",          // flow id in this area: listed under it, dotted on the diagram
-      steps: [2],                 // 1-based message numbers in that flow (A->>B lines, %% skipped)
+      steps: [2],                 // 1-based message numbers in that flow (any arrow, incl. -->> and self-messages)
       types: ["song-clock"],      // optional api type ids; types whose source file is in `where` link automatically
       status: "open",             // open | fixing | fixed | wontfix
       summary: "One sentence: user-visible symptom. Markdown.",
@@ -130,7 +130,7 @@ window.PLAN = {
 
   roadmap: [{ id: "m1", stage: "Local-first editing", summary: "optional md", items: ["inline md", …], rev: 3 }],
 
-  replies: {                      // Claude's answers to exported notes, keyed by note id
+  replies: {                      // offline only: answers to exported notes, keyed by note id. Live answers win.
     "nmh3k2x9ab": { text: "Answer. Newlines OK, inline md.", version: 3 }
   },
 
@@ -163,16 +163,18 @@ The engine gives every rendered element an id derived from the data:
 
 Paragraph, bullet and message indexes (`p0`, `li1`, `msg/3`) are positions. Inserting a paragraph or message shifts the ones after it. The engine recovers by searching for each note's saved quote, so this is fine, but prefer appending over inserting in the middle when it's easy.
 
-## Notes export (`<plan-id>-notes-<date>.json`)
+## Notes export (`.live/notes.json`, or `<plan-id>-notes-<date>.json` from the Notes page)
+
+Live pages keep `<dir>/.live/notes.json` current in this format. A page with no server can only export it by hand.
 
 ```json
 {
   "format": "plan-explorer-notes",
-  "engine": "2.0.0",
+  "engine": "2.4.1",
   "plan": "offline-sync",
   "title": "Offline sync for Notes",
   "planVersion": 2,
-  "page": "/Users/…/Docs/offline-sync-explorer/index.html",
+  "page": "/",
   "exportedAt": "2026-10-28T22:10:00.000Z",
   "counts": { "total": 4, "open": 3, "answered": 0, "resolved": 1, "orphaned": 0 },
   "notes": [{
@@ -195,4 +197,4 @@ Paragraph, bullet and message indexes (`p0`, `li1`, `msg/3`) are positions. Inse
 }
 ```
 
-Reply by adding `replies[note.id]`. Don't copy notes into plan.js. They live in the user's browser.
+Live: reply with the note's `reply` command (answers land in `.live/answers.json`). Offline only: add `replies[note.id]`. Never copy notes into plan.js.

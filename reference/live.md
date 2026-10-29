@@ -15,7 +15,7 @@ page ◀────SSE───── server ◀──── watches plan.js �
 | `node live.mjs <dir> [--exec "<cmd>"]` | **The one command.** It starts the server in the background, or reuses it (and restarts it if `live.mjs` or the engine changed). It prints `{"type":"ready","url","open"}`, then one JSON line per note: still-pending notes first (`"pending": true`), then new ones as they're saved. With `--exec`, it runs `<cmd>` per note instead of printing. Re-running it is safe: a newer listener takes over. |
 | `node live.mjs reply <dir> <noteId> [--status working\|done] [text \| -]` | Answers a note. `-` reads the text from stdin. An empty `done` reply marks the note "seen". |
 | `node live.mjs status <dir>` | Shows whether the server is running, its URL, the agent's state (`listening`, `exec` or `offline`) and the pending notes. |
-| `node live.mjs stop <dir>` | Stops the server. |
+| `node live.mjs stop <dir>` | Stops the server (asks it to exit, then waits until the port is free). |
 | `node live.mjs serve <dir> [--port N]` | The server itself, in the foreground. `<dir>` starts this for you. |
 
 **URL.** The port is derived from the folder path, in the range 47100–47899, so it stays stable across restarts. The first visit uses `open` (`url?t=<token>`). The server answers with an HttpOnly, SameSite=Strict cookie, and from then on the plain `url` works in that browser. The token persists in `.live/server.json`, so bookmarks survive restarts.
@@ -32,11 +32,11 @@ page ◀────SSE───── server ◀──── watches plan.js �
   "target": "full text of the element the note is on",
   "plan": "offline-sync", "planVersion": 2,
   "planFile": "/abs/path/plan.js",
-  "reply": "node \"/abs/live.mjs\" reply \"/abs/dir\" nmh3k2x9ab -"
+  "reply": "node '/abs/live.mjs' reply '/abs/dir' 'nmh3k2x9ab' -"
 }
 ```
 
-`reply` is the exact command that answers the note, so an agent needs no other instructions to close the loop. Editing a note sends it again under the same `noteId`, and the newest version wins.
+`reply` is the exact command that answers the note, single-quoted for POSIX shells, so an agent needs no other instructions to close the loop. Note ids are `[A-Za-z0-9_-]{1,64}`. Editing a note sends it again under the same `noteId`, and the newest version wins.
 
 ## Adapters
 
@@ -50,15 +50,18 @@ Every `/live/*` call needs the token: the cookie, the `x-live-token` header, or 
 
 | route | body / response |
 |---|---|
-| `GET /live/hello` | `{ agent: "listening"\|"exec"\|"offline", pending: [noteId], answers: {noteId: answer}, notes: [raw notes] \| null }` |
+| `GET /live/hello` | `{ pid, stamp, planMtime, agent: "listening"\|"exec"\|"offline", pending: [noteId], answers: {noteId: answer}, notes: [raw notes], deleted: {noteId: time} }` |
 | `GET /live/events` | SSE. `status` `{agent, pending}`, `answer` `{noteId, text, status, at, by}`, `plan` `{mtime}` |
-| `PUT /live/notes` | `{ raw: [notes], export: <notes export JSON> }`. Writes `.live/notes-raw.json` and `.live/notes.json` (export format). |
+| `PUT /live/notes` | `{ raw: [notes], deleted: {noteId: time}, export }` → `{ notes, deleted }`. Merges per note id (newest `updated` wins) and keeps deletions as tombstones, so tabs and restarts never drop or resurrect notes. Writes `notes.json` only when the client already had the merged set; otherwise the client adopts the result and sends again. |
+| `POST /live/stop` | Shuts the server down cleanly. |
 | `POST /live/ask` | `{ note: <export-format note>, target, route, plan, planVersion }` |
 | `POST /live/answer` | `{ noteId, text, status: "working"\|"done", by? }` |
 
 ## State (`<dir>/.live/`, git-ignored, mode 700)
 
-`server.json` (port, token, pid, URLs) · `server.log` · `asks.jsonl` (append-only) · `answers.json` (latest per note) · `notes.json` (export format, always current) · `notes-raw.json` · `listener.json` (heartbeat, mode).
+`server.json` (port, token, pid, URLs) · `server.log` · `asks.jsonl` (append-only) · `answers.json` (latest per note) · `notes.json` (export format, always current) · `notes-raw.json` · `deleted.json` (tombstones) · `listener.json` (heartbeat, mode) · `spawn.lock` (while starting).
+
+**Lifecycle.** A server is trusted only if it answers `/live/hello` with its token and the pid in `server.json`; a stale pid is never killed. Starts are serialized by `spawn.lock`. A server with no open page and no listener for 6 hours exits.
 
 A question is pending until it has a `done` answer newer than the ask. Asking the same note again re-opens it.
 
@@ -68,6 +71,6 @@ The agent behind the bridge can edit files and run tools, so the server accepts 
 - connections on `127.0.0.1`;
 - a `Host` of `127.0.0.1:<port>` or `localhost:<port>`, which blocks DNS rebinding;
 - no `Origin`, or our own;
-- the token (as a cookie, header or query) on every API call.
+- the token (as a cookie, header or query) on every API call and every file except the engine page itself.
 
-Dotfiles (including `.live/`) and paths outside `<dir>` are never served. The token reaches the page in the URL once. It becomes an HttpOnly cookie that page scripts can't read, and it's stripped from the address bar.
+Responses carry `nosniff`, `Cross-Origin-Resource-Policy: same-origin`, `Referrer-Policy: no-referrer`, and the engine page a strict CSP (scripts only from itself and jsDelivr, where Mermaid is pinned with SRI; `connect-src 'self'`). Plan text and replies are untrusted: links render only for web, mail, in-page and relative targets. Dotfiles (including `.live/`) and paths outside `<dir>` are never served. The token reaches the page in the URL once. It becomes an HttpOnly cookie that page scripts can't read, and it's stripped from the address bar.
