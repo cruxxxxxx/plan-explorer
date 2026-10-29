@@ -32,13 +32,13 @@ async function phase1() {
   ok("pin drawn", q$$("#pins .pin").length === 1);
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
   ok("note mode on", document.body.classList.contains("notemode"));
-  const msg = q$('text.messageText[data-nid="areas/local-store/flows/edit-offline/msg/1"]');
+  const msg = q$('text.messageText[data-nid="areas/local-store/flows/edit-offline/msg/@append-op-insert"]');
   ok("svg message stamped", !!msg);
   msg.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: 500, clientY: 500 }));
   ok("note-mode click on step opens popover (not drawer)", !pop().hidden && document.getElementById("drawer").hidden);
   pop().querySelector('[data-mark="!"]').click();
   saveNote("fsync this");
-  ok("svg note saved", notesNow().some(n => n.anchor.nid.endsWith("edit-offline/msg/1")));
+  ok("svg note saved", notesNow().some(n => n.anchor.nid.endsWith("edit-offline/msg/@append-op-insert")));
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   ok("note mode off", !document.body.classList.contains("notemode"));
   const li = q$('[data-nid="areas/local-store/sections/op-format/li0"]');
@@ -64,7 +64,7 @@ async function phase1() {
   ok("resolve", notesNow().find(n => n.anchor.kind === "text").status === "resolved");
 
   // ── coupling: step dots, tooltips, drawer ──
-  const dot = q$('#page .stepdot[data-nid="areas/local-store/flows/edit-offline/msg/1"]');
+  const dot = q$('#page .stepdot[data-nid="areas/local-store/flows/edit-offline/msg/@append-op-insert"]');
   ok("step dot on linked step", !!dot && dot.classList.contains("sev-high"));
   ok("no dot on unlinked step", !q$('#page .stepdot[data-nid="areas/local-store/flows/edit-offline/msg/0"]'));
   msg.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, clientX: 400, clientY: 400 }));
@@ -81,10 +81,10 @@ async function phase1() {
   ok("drawer → type", q$("#drawer").textContent.includes("Append-only log") && !!q$('#drawer [data-dr="back"]'));
   click('#drawer [data-dr="back"]');
   ok("drawer back", q$("#drawer").textContent.includes("synchronous=NORMAL"));
-  const fixEl = q$('#drawer [data-nid="areas/local-store/issues/append-not-durable/fix/p0"]');
+  const fixEl = q$('#drawer [data-nid="areas/local-store/items/append-not-durable/how/p0"]');
   altClick(fixEl);
   saveNote("! needs a migration too");
-  ok("note on issue field in drawer", notesNow().some(n => n.anchor.nid === "areas/local-store/issues/append-not-durable/fix/p0"));
+  ok("note on issue field in drawer", notesNow().some(n => n.anchor.nid === "areas/local-store/items/append-not-durable/how/p0"));
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   ok("Esc closes drawer", q$("#drawer").hidden);
 
@@ -96,7 +96,7 @@ async function phase1() {
   ok("severity pill filters", q$$("#page .irow").length === 1 && !!q$('#page [data-open-issue="local-store/append-not-durable"]'));
   click('#page .xpills [data-ex="sev:high"]');
   await wait(300);
-  ok("severity pill toggles off", q$$("#page .irow").length === 2);
+  ok("severity pill toggles off (questions are rows too)", q$$("#page .irow").length === 3 && !!q$('#page [data-open-issue="local-store/compaction"]'));
   click('[data-ex="kind:issue"]');
   await wait(300);
   ok("show issues only", q$$("#page figure.flow").length === 0 && q$$("#page .irow").length === 2);

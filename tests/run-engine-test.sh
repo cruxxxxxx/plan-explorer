@@ -17,7 +17,13 @@ run() {
     | sed -n '/<pre id="results">/,/<\/pre>/p' | sed 's/<[^>]*>//g'
   rm -rf "$tmp"
 }
-out="$(run examples/review/plan.js interaction-test.js; run examples/plan/plan.js work-test.js)"
+#   anchor-test: insert a message into a flow; anchored items and notes stay put, numeric steps shift.
+#   compat-test and the legacy-plan run: the old issues/work/openQuestions shape still renders, old nids land.
+out="$(run examples/review/plan.js interaction-test.js
+run examples/plan/plan.js work-test.js
+run examples/plan/plan.js anchor-test.js
+run tests/fixtures/legacy-plan.js work-test.js
+run tests/fixtures/legacy-review.js compat-test.js)"
 echo "$out"
 echo "$out" | grep -q '^PASS' || { echo "no results (Mermaid offline?)"; exit 1; }
 ! echo "$out" | grep -q '^FAIL'

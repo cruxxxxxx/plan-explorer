@@ -1,11 +1,11 @@
 ---
 name: plan-explorer
-description: Builds a live, interactive local "map" of a plan or code review. It has sequence diagrams, issues pinned to diagram steps, and API docs tied to the file tree. The user marks up anything on the page, and each note streams to the agent, who answers and edits the plan while the page hot-reloads. Use when the user asks for a plan explorer, review map or interactive plan page, wants to "explore" or "map out" a plan, design or review, wants sequence diagrams of a plan, or wants to answer or pick up notes from one of these pages (including a *-notes-*.json).
+description: Builds a live, interactive local "map" of a plan or code review. It has sequence diagrams, findings and work pinned to diagram steps, and API docs tied to the file tree. The user marks up anything on the page, and each note streams to the agent, who answers and edits the plan while the page hot-reloads. Use when the user asks for a plan explorer, review map or interactive plan page, wants to "explore" or "map out" a plan, design or review, wants sequence diagrams of a plan, or wants to answer or pick up notes from one of these pages (including a *-notes-*.json).
 ---
 
 # Plan Explorer
 
-**Focus:** a map of a plan or a code review that the agent writes from the code. It shows what happens (flows), where it goes wrong (issues pinned to diagram steps), and what code is involved (API types, by file). The human explores it, marks it up, and the agent refines it over rounds. This is not a generic document annotator.
+**Focus:** a map of a plan or a code review that the agent writes from the code. It shows what happens (flows), where it goes wrong or changes (items pinned to diagram steps), and what code is involved (API types, by file). The human explores it, marks it up, and the agent refines it over rounds. This is not a generic document annotator.
 
 **Usage is one command; the effort goes into the data.** A plan is a folder that holds a single file, `plan.js` (`window.PLAN = { … }`). One command serves it with the skill's engine and keeps it live:
 
@@ -19,16 +19,17 @@ That command (re-)starts a background server for `<dir>`, prints the page URL, a
 - Any edit to `plan.js` reloads the open page in place.
 - Engine updates reach every page, because no project keeps a copy.
 
-**Pages.** **Explore** is the home page: every area's flows with their issues under them, plus questions, options and sections, filtered by search, area tags, kind, severity, category, status and origin. **API** has a folder tree and type pages, with a foldable dependency graph. **Roadmap** and **Notes** are the other two. Diagrams are interactive: hovering a step shows a tooltip with its issues, a severity dot marks steps that have issues, clicking a step opens the issue in a side drawer, and clicking a participant opens its API type. Pinch or ⌘-scroll to zoom, drag to pan.
+**Pages.** **Explore** is the home page: every area's flows with their items under them, plus options and sections, filtered by search, area, type, severity, category, status and origin. **API** has a folder tree and type pages, with a foldable dependency graph. **Roadmap** and **Notes** are the other two. Diagrams are interactive: hovering a step shows its items, a dot marks steps that have items, clicking a step opens the item in a side drawer, and clicking a participant opens its API type. Pinch or ⌘-scroll to zoom, drag to pan.
 
 Skill files, relative to this SKILL.md:
 - `reference/schema.md`: the full `plan.js` shape and the note format. **Read it before writing plan.js.**
 - `reference/diagrams.md`: rules for good high-level sequence diagrams. **Read it before writing flows.**
-- `examples/plan/plan.js` (an implementation plan with `work`) and `examples/review/plan.js` (a review with `issues`): complete small examples.
+- `examples/plan/plan.js` (an implementation plan) and `examples/review/plan.js` (a review): complete small examples.
 - `scripts/live.mjs`: the server and the note stream. Protocol: `reference/live.md`.
+- `scripts/migrate-plan.mjs <plan.js> --out <file>`: converts an old plan (`issues`/`work`/`openQuestions`) to items.
 - `scripts/verify.sh <dir>`: validates plan.js, then renders every flow in headless Chrome and reports Mermaid errors.
 - `engine/explorer.html`: the renderer. It's served from here; never copy or edit it per project.
-- `tests/run-engine-test.sh` and `tests/live-test.sh`: self-tests. Run them only after changing the engine or the server.
+- `tests/run-engine-test.sh`, `tests/live-test.sh` and `tests/migrate-test.sh`: self-tests. Run them only after changing the engine or the server.
 
 ## Hard rules
 
@@ -57,54 +58,44 @@ Good:
 
 This applies to replies too. Answer the question directly. Don't say what you looked at to get the answer.
 
-## Context decides the shape: `kind`
+## Items: everything pinned to a flow
 
-Set `PLAN.kind` first, because it decides how everything pinned to a flow reads:
+Findings, work, risks, decisions and questions are all **items** in `areas[].items`, with one shape:
 
-| `kind` | what it is | pinned items | how they read |
-|---|---|---|---|
-| `"review"` | code review, audit, bug hunt: something that exists and may be wrong | `areas[].issues` (findings) | severity high/medium/low, origin, open → fixed |
-| `"plan"` | implementation plan, design, feature build: something to be made | `areas[].work` | type `new` · `change` · `remove` · `risk` · `decision`, status `todo` → `doing` → `done`, or `dropped` (kept for the record, hidden by default). Neutral colours, no severity. |
+| field | |
+|---|---|
+| `id`, `title` | descriptive kebab slug (`pause-skews-bridge`, never a tracker code like `KOREO-1`); the problem or change in plain words |
+| `type` | `bug` · `risk` · `new` · `change` · `remove` · `decision` · `question` |
+| `status` | `open` → `doing` → `done`, or `dropped` (kept for the record, hidden by default) |
+| `flow`, `steps` | the flow in this area where it happens, and the steps on it (see "Anchors") |
+| `types`, `where` | API type ids it touches; every `path:line` (types whose `source` is in `where` link automatically) |
+| `summary` | one sentence: the user-visible symptom, or the change |
+| `trigger`, `why`, `how` | exact reproduction · mechanism or current behaviour, naming fields and values · concrete steps or fix |
+| `impact`, `mitigation`, `verify` | what goes wrong and for whom · how it's prevented (risks) · the test that proves it / done when |
+| `answer`, `related`, `rev` | a question's answer (answered = done) · ids of items or API types, as links · version last changed |
 
-- Never put severity on planned work. A plan full of red and amber dots reads like a bug report, which is a false alarm.
-- Things that might go wrong in a plan are `work` items with `type: "risk"`, using `impact` and `mitigation`.
-- A current problem that the plan fixes is work too. Title it as the change (`Save an unlock the moment it is earned`), and put the current behaviour and cause in `why`. Use `issues` in a plan only for a bug that's out of the plan's scope and still worth flagging.
-- Fields for `work`: `title`, `type`, `status`, `flow`, `steps`, `types`, `where` (files to touch), `summary`, `why` (current behaviour, or the cause when the work fixes something), `how`, `impact`, `mitigation` (for risks), `verify` (done when), `related`, `rev`. Work is ordered by where it happens in its flow.
-- Let the kind shape the rest too. A plan leans on `options`, `openQuestions` and `roadmap`. A review leans on `issues` and API types `state: "changed"`.
+**`PLAN.kind` sets the tone.** `"review"` (code review, audit, bug hunt): items are `bug`s by default and take `severity` (`high | medium | low`, exactly one), `origin` (`pre-existing | introduced`) and `category` (the subsystem **affected**, from the user's side: `Calibration`, not the library the bug lives in). `"plan"` (something to be made): items use the neutral types, ordered by step, and never take severity. A plan full of red dots reads as a false alarm.
+- In a plan, a problem the plan fixes is a `change` titled as the change; the current behaviour goes in `why`. Use `bug` only for something out of scope worth flagging. Things that might go wrong are `risk`s with `impact` and `mitigation`.
+- `question`s are your questions for the user. Pin them to a step when they're about one.
+- Each item stands alone: whoever picks it up never needs the transcript. Findings never go in `sections`; low-value nits can share one "Small cleanups" section.
+- Only done, dropped, `remove`, `decision` and `question` items may skip `flow`. If a finding has no flow to sit on, add the flow.
 
-## Issues (reviews, audits, bugs)
+### Anchors: pin steps by name
 
-Findings go in `areas[].issues`, never in `sections`. The engine sorts them by severity, colours them softly (high / medium / low), and shows them on Explore under their flow. The severity pills on each area work as filter tabs. Clicking an issue opens its full context in the drawer, and every field can take notes.
+Put `%% @name` on its own line directly above a message, and use the name in `steps`:
 
-**Labels**
-- `id`: a descriptive kebab slug (`pause-skews-bridge`). Never a tracker code like `KOREO-1`, `ANT-6` or `X-2`. Reviewer or agent prefixes are process; they never appear in ids, titles or text.
-- `title`: the problem in plain words (`Post-seek bridge keeps running while paused`). No code prefix, no severity, no branch.
-- `category`: the subsystem that is **affected**, from the user's point of view (`Calibration`, `Song clock`, `Scoring`, `Scene flow`). Don't use the file or library the bug happens to live in. A Koreographer-callback bug that skews calibration is `Calibration`.
-- `severity`: `high | medium | low`. Exactly one. Never a range like "medium-low".
-- `origin`: `pre-existing` (also on the base branch) or `introduced` (new in this change). Use this field rather than writing "(present on cleanup-audit)" into the title.
+```
+  U->>UI: types a sentence
+  %% @append
+  UI->>Log: append op
+```
+`steps: ["append"]`. Mermaid ignores the comment. Anchored steps (and notes on them) stay on their message when you insert or remove messages above; a number (`steps: [2]`, the 2nd message line, `participant`/`note`/`%%` lines don't count) silently moves to whatever message is 2nd. Anchor every pinned message. `check.mjs` flags unknown anchors and numbers in anchored flows.
 
-**Context.** Each issue must stand alone, so someone who fixes it never needs the review transcript:
-- `where`: every `path:line` involved.
-- `summary`: one sentence giving the user-visible symptom.
-- `trigger`: the exact conditions that reproduce it.
-- `cause`: the mechanism, naming the fields, methods and values involved.
-- `impact`: what goes wrong, how badly, and for whom.
-- `fix`: concrete steps, naming the methods to change.
-- `verify`: the test or manual check that proves the fix.
-- `related`: ids of other issues, open questions or API types (rendered as links). Merged duplicates are listed here, not in the title.
-- `status`: `open | fixing | fixed | wontfix`.
-
-**Link every issue** so it appears on the diagrams instead of in a separate list:
-- `flow`: the id of the flow in the same area where it happens. The issue is then listed under that flow.
-- `steps`: 1-based message numbers in that flow: every message line (`->>`, `-->>`, `->`, `-x`, `-)`, self-messages like `D->>D:`) counts as one step, top to bottom; `participant`, `note` and `%%` lines don't; a `<br>` inside a message is still one step. Each step gets a dot.
-- `types`: API type ids it touches. Types whose `source` file appears in `where` are linked automatically.
-Only fixed or wontfix issues, or issues with no fitting flow, may go without a flow. If an issue has no flow to sit on, consider adding the flow.
-
-Low-value nits can share one `sections` entry ("Small cleanups") as a bullet list. Anything with a fix someone would schedule is an issue.
+Old plans with `issues`, `work` or `openQuestions` still render; `scripts/migrate-plan.mjs` converts them and anchors their steps.
 
 ## API docs
 
-`PLAN.api` holds the types the plan touches, so the page doubles as API docs. The API page has a left-hand tree built from each type's `source` directory and file, with a filter box. The right pane shows either the dependency graph (grouped by top-level folder, and folded by default above 18 types) or one type: its path, summary, **Depends on** / **Used by**, the members table (**Signatures** or **Full**), the issues in its file, the flows it appears in, and a neighbourhood graph. `source` drives the tree, so set it on every type, including new ones (the planned path).
+`PLAN.api` holds the types the plan touches, so the page doubles as API docs. The API page has a left-hand tree built from each type's `source` directory and file, with a filter box. The right pane shows either the dependency graph (grouped by top-level folder, and folded by default above 18 types) or one type: its path, summary, **Depends on** / **Used by**, the members table (**Signatures** or **Full**), the items in its file, the flows it appears in, and a neighbourhood graph. `source` drives the tree, so set it on every type, including new ones (the planned path).
 
 **Retrieve or create**
 
@@ -120,9 +111,9 @@ The same rules apply: ids are permanent, and docs state technical facts only.
 ## Say it once
 
 Every fact lives in one place. The page reaches it from elsewhere through links, tooltips and the drawer.
-- Couple content by context, not by resource type. An issue belongs under the flow where it happens, and a type is reached from the participant that uses it. Don't add an "Issues" section or a list of types per area.
-- Don't repeat an issue's summary in a section or caption. Link to it with `related` or `flow`/`steps`.
-- Captions say what to notice in the diagram, not what the issues say.
+- Couple content by context, not by resource type. An item belongs under the flow where it happens, and a type is reached from the participant that uses it. Don't add an "Issues" section or a list of types per area.
+- Don't repeat an item's summary in a section or caption. Link to it with `related` or `flow`/`steps`.
+- Captions say what to notice in the diagram, not what the items say.
 
 ## 1 · Seed
 
@@ -134,9 +125,8 @@ Every fact lives in one place. The page reaches it from elsewhere through links,
    - **1–3 sequence flows per area.** Aim for many small flows, not a few big ones. This is the heart of the page. Set `actors` on each one;
    - `sections` only where prose is truly needed. Keep them short;
    - `options` wherever there's a real choice. Include pros and cons, and set `pick` only once it's decided;
-   - `openQuestions`: your own questions for the user. Be generous, because this is how exploration starts;
+   - `kind`, then `items` (see "Items"): findings or work, each with `flow`, anchored `steps` and `types`, plus `question`s for the user. Be generous with questions, because this is how exploration starts;
    - `api`: the types the plan touches (see "API docs"), when the plan involves code;
-   - `kind` (see "Context decides the shape"). Reviews get `issues`, and plans get `work`. Either way, set `flow`, `steps` and `types` on each one;
    - a rough `roadmap`, if it helps;
    - `changelog: [{ version: 1, date, what: "First draft" }]`, plus `replies: {}`.
 4. Run `<skill>/scripts/verify.sh <dir>`. It needs network for the Mermaid CDN; if the sandbox blocks Chrome's network, rerun it with the sandbox disabled. Fix every ✗. Treat "not linked to a flow" warnings as work to do.
@@ -160,9 +150,9 @@ For each note:
    | mark | meaning | what you do |
    |---|---|---|
    | `?` | question | Answer it. If the answer changes the plan, change the plan too. |
-   | `!` | concern or risk | Address it in the content (a flow, issue, section or option), and say what changed. If you disagree, say why. |
+   | `!` | concern or risk | Address it in the content (a flow, item, section or option), and say what changed. If you disagree, say why. |
    | `+` | idea | Fold it in, as an option, flow step or section, or say why not. |
-   | `✓` | agree | Lock it in: set `pick: true` on options, `status: "settled"` on areas, or answer the open question. |
+   | `✓` | agree | Lock it in: set `pick: true` on options, `status: "settled"` on areas, set a question's `answer`, or set an item's `status`. |
    | `✗` | cut | Remove or shrink the target, and say what went. |
    | none | plain note | Treat it as context. A reply is optional. |
 

@@ -22,6 +22,8 @@ sequenceDiagram
   participant Log as Op log
   %% ->> is a request, -->> is a reply
   U->>UI: types a sentence
+  %% an anchor names the message below it, so items can use steps: ["append"]
+  %% @append
   UI->>Log: append op
   Log-->>UI: ok
   Note over Log: ops queue until online
@@ -40,6 +42,7 @@ sequenceDiagram
 - Use `alt/else/end`, `opt/end`, `loop/end` and `par/and/end` for branching. Don't nest more than one level deep.
 - Avoid `;`, `#`, `{}` and raw `<`/`>` in message text. Write "and" or "then" instead of `;`. `<br>` is fine.
 - Don't use `autonumber`. It adds noise, and notes already identify messages.
+- Put `%% @name` on its own line directly above every message an item is pinned to. Items and notes then follow the message, not its position.
 - Only `sequenceDiagram` gets per-message note targets. Other Mermaid types render, but notes attach to the whole flow.
 
 ## Flowcharts
