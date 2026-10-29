@@ -24,7 +24,7 @@ That command (re-)starts a background server for `<dir>`, prints the page URL, a
 Skill files, relative to this SKILL.md:
 - `reference/schema.md`: the full `plan.js` shape and the note format. **Read it before writing plan.js.**
 - `reference/diagrams.md`: rules for good high-level sequence diagrams. **Read it before writing flows.**
-- `examples/plan.js`: a complete small example.
+- `examples/plan/plan.js` (an implementation plan with `work`) and `examples/review/plan.js` (a review with `issues`): complete small examples.
 - `scripts/live.mjs`: the server and the note stream. Protocol: `reference/live.md`.
 - `scripts/verify.sh <dir>`: validates plan.js, then renders every flow in headless Chrome and reports Mermaid errors.
 - `engine/explorer.html`: the renderer. It's served from here; never copy or edit it per project.
@@ -56,6 +56,21 @@ Good:
 > - Removing the post-seek guards leaves the clock bridge running while paused.
 
 This applies to replies too. Answer the question directly. Don't say what you looked at to get the answer.
+
+## Context decides the shape: `kind`
+
+Set `PLAN.kind` first, because it decides how everything pinned to a flow reads:
+
+| `kind` | what it is | pinned items | how they read |
+|---|---|---|---|
+| `"review"` | code review, audit, bug hunt: something that exists and may be wrong | `areas[].issues` (findings) | severity high/medium/low, origin, open → fixed |
+| `"plan"` | implementation plan, design, feature build: something to be made | `areas[].work` | type `new` · `change` · `remove` · `risk` · `decision`, status `todo` → `doing` → `done`. Neutral colours, no severity. |
+
+- Never put severity on planned work. A plan full of red and amber dots reads like a bug report, which is a false alarm.
+- Things that might go wrong in a plan are `work` items with `type: "risk"`, using `impact` and `mitigation`.
+- A current problem that the plan fixes is work too. Title it as the change (`Save an unlock the moment it is earned`), and put the current behaviour and cause in `why`. Use `issues` in a plan only for a bug that's out of the plan's scope and still worth flagging.
+- Fields for `work`: `title`, `type`, `status`, `flow`, `steps`, `types`, `where` (files to touch), `summary`, `why` (current behaviour, or the cause when the work fixes something), `how`, `impact`, `mitigation` (for risks), `verify` (done when), `related`, `rev`. Work is ordered by where it happens in its flow.
+- Let the kind shape the rest too. A plan leans on `options`, `openQuestions` and `roadmap`. A review leans on `issues` and API types `state: "changed"`.
 
 ## Issues (reviews, audits, bugs)
 
@@ -121,7 +136,7 @@ Every fact lives in one place. The page reaches it from elsewhere through links,
    - `options` wherever there's a real choice. Include pros and cons, and set `pick` only once it's decided;
    - `openQuestions`: your own questions for the user. Be generous, because this is how exploration starts;
    - `api`: the types the plan touches (see "API docs"), when the plan involves code;
-   - for reviews: `issues` with `flow`, `steps` and `types` set;
+   - `kind` (see "Context decides the shape"). Reviews get `issues`, and plans get `work`. Either way, set `flow`, `steps` and `types` on each one;
    - a rough `roadmap`, if it helps;
    - `changelog: [{ version: 1, date, what: "First draft" }]`, plus `replies: {}`.
 4. Run `<skill>/scripts/verify.sh <dir>`. It needs network for the Mermaid CDN; if the sandbox blocks Chrome's network, rerun it with the sandbox disabled. Fix every ✗. Treat "not linked to a flow" warnings as work to do.

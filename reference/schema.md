@@ -13,6 +13,7 @@ Ids must be lowercase kebab-case (`[a-z0-9-]`, no slashes) and unique within the
 ```js
 window.PLAN = {
   id: "offline-sync",             // required. Keys browser storage and names the export file
+  kind: "plan",                   // "plan" (work items, no severity) | "review" (findings with severity)
   title: "Offline sync for Notes",// required
   version: 3,                     // integer. Bump once per refinement round
   updated: "2026-10-28",
@@ -42,7 +43,7 @@ window.PLAN = {
       caption: "One line on what to notice. Markdown."
     }],
 
-    issues: [{                    // findings: sorted by severity, softly colour-coded
+    issues: [{                    // kind "review": findings, sorted by severity, softly colour-coded
       id: "pause-skews-bridge",   // descriptive slug, never a tracker code
       title: "Post-seek bridge keeps running while paused",
       severity: "medium",         // high | medium | low
@@ -61,6 +62,22 @@ window.PLAN = {
       verify: "Test or check that proves it.",
       related: ["calibration-delay", "q-id", "api-type-id"],
       rev: 3
+    }],
+
+    work: [{                      // kind "plan": what gets built, pinned to flow steps. Neutral colours.
+      id: "cursor-storage",       // descriptive slug, permanent
+      title: "Store the cursor next to the op log",
+      type: "change",             // new | change | remove | risk | decision
+      status: "todo",             // todo | doing | done | dropped
+      flow: "reconnect", steps: [3], types: ["sync-client"],
+      where: ["src/sync/SyncClient.ts"],   // files to touch
+      summary: "One sentence. Markdown.",
+      why: "Current behaviour and why it changes (the cause, for fixes).",
+      how: "Concrete approach.",
+      impact: "Risks only: what goes wrong if it happens.",
+      mitigation: "Risks only: how it's prevented.",
+      verify: "Done when …",
+      related: ["…"], rev: 3
     }],
 
     sections: [{ id: "cursor", title: "Cursors", rev: 3, body: "Markdown, short." }],
@@ -136,6 +153,7 @@ The engine gives every rendered element an id derived from the data:
 | diagram message, actor, note | `…/flows/<id>/msg/<n>`, `…/actor/<participant id>`, `…/note/<n>` |
 | option, its pros and cons | `areas/<area>/options/<id>`, `…/pros/0`, `…/cons/1` |
 | issue title, summary, field paragraph | `areas/<area>/issues/<id>`, `…/summary/p0`, `…/fix/p0` (also `trigger`, `cause`, `impact`, `verify`) |
+| work title, summary, field paragraph | `areas/<area>/work/<id>`, `…/summary/p0`, `…/how/p0` (also `why`, `impact`, `mitigation`, `verify`) |
 | open question, answer | `areas/<area>/questions/<id>`, `…/answer` |
 | roadmap stage, item | `roadmap/<id>`, `roadmap/<id>/<n>` |
 | API type, summary, body | `api/<type>`, `api/<type>/summary`, `api/<type>/body/p0` |

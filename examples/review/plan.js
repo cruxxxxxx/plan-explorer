@@ -1,8 +1,9 @@
-// Plan Explorer data. The engine (index.html) renders this; edit only this file.
+// Plan Explorer data: a code review. Findings (areas[].issues) are pinned to flow steps.
 // Schema: ~/.claude/skills/plan-explorer/reference/schema.md
 window.PLAN = {
   id: "offline-sync",
-  title: "Offline sync for Notes",
+  kind: "review",
+  title: "Offline sync: review",
   version: 2,
   updated: "2026-10-28",
 

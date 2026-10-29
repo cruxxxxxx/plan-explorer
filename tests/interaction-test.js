@@ -1,4 +1,4 @@
-// Headless interaction test for the v2 engine against examples/plan.js.
+// Headless interaction test for the v2 engine against examples/review/plan.js.
 // Drives the page with synthetic DOM events and writes PASS/FAIL lines into #results.
 if (localStorage.getItem("itest-phase") !== "2") { localStorage.clear(); }
 const out = [];

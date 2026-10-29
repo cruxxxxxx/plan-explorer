@@ -54,6 +54,11 @@ function checkIds(list, where) {
 if (!plan.id || !ID.test(plan.id)) { err("plan.id is required, lowercase kebab-case (it keys the notes storage)"); }
 if (!plan.title) { err("plan.title is required"); }
 if (typeof plan.version !== "number") { warn("plan.version should be a number"); }
+if (!plan.kind) {
+  warn('plan.kind is not set. Use "review" (findings with severity) or "plan" (an implementation plan: work items, no severity). It decides how items read.');
+} else if (!["review", "plan"].includes(plan.kind)) {
+  warn(`plan.kind "${plan.kind}" is not review|plan`);
+}
 if (!Array.isArray(plan.areas) || !plan.areas.length) { err("plan.areas must be a non-empty array"); }
 
 checkIds(plan.areas, "areas");
@@ -88,7 +93,7 @@ function checkIssueLinks(i, ib, a, flowIds) {
   for (const t of i.types || []) {
     if (!typeIds.has(t)) { err(`${ib}: types → "${t}" is not an api type id`); }
   }
-  if (!i.flow && (a.flows || []).length && i.status !== "fixed" && i.status !== "wontfix") {
+  if (!i.flow && (a.flows || []).length && !["fixed", "wontfix", "done", "dropped"].includes(i.status) && i.type !== "remove" && i.type !== "decision") {
     warn(`${ib}: not linked to a flow (add flow + steps so it shows on the diagram)`);
   }
 }
@@ -140,6 +145,20 @@ for (const a of plan.areas || []) {
     if (!i.where) { warn(`${ib}: no where (file:line)`); }
     if (/^[A-Z]+-\d+\b/.test(i.title || "")) { warn(`${ib}: title starts with a tracker-style id; titles describe the problem`); }
     if (i.severity !== "low" && !i.fix) { warn(`${ib}: no fix`); }
+  }
+  checkIds(a.work, `${b}/work`);
+  const itemIds = new Set((a.issues || []).map(i => i.id));
+  for (const w of a.work || []) {
+    const wb = `${b}/work/${w.id}`;
+    if (itemIds.has(w.id)) { err(`${wb}: id also used by an issue in this area`); }
+    if (!w.title) { err(`${wb}: missing title`); }
+    if (w.type && !["new", "change", "remove", "risk", "decision"].includes(w.type)) { warn(`${wb}: type "${w.type}" is not new|change|remove|risk|decision`); }
+    if (w.status && !["todo", "doing", "done", "dropped"].includes(w.status)) { warn(`${wb}: status "${w.status}" is not todo|doing|done|dropped`); }
+    if (w.severity) { warn(`${wb}: work items don't take severity (that's for review findings); use type`); }
+    checkIssueLinks(w, wb, a, flowIds);
+  }
+  if (plan.kind === "plan" && (a.issues || []).length) {
+    warn(`${b}: plan.kind is "plan" but the area has issues; issues render as review findings with severity. Use work for planned changes and risks.`);
   }
   for (const s of a.sections || []) {
     if (/^[A-Z]+-\d+\b/.test(s.title || "")) { warn(`${b}/sections/${s.id}: title "${s.title}" looks like an issue; use areas[].issues`); }

@@ -21,7 +21,7 @@ field() { node -e 'console.log(require(process.argv[1])[process.argv[2]])' "$1" 
 
 # The plan folder holds only plan.js; the engine comes from the skill (here: engine + test harness).
 mkdir -p "$tmp/site" "$tmp/profile"
-cp "$S/examples/plan.js" "$S/tests/live-page-test.js" "$tmp/site/"
+cp "$S/examples/review/plan.js" "$S/tests/live-page-test.js" "$tmp/site/"
 sed 's|</body>|<pre id="results">pending</pre><script src="live-page-test.js"></script></body>|' "$S/engine/explorer.html" > "$tmp/engine.html"
 export PLAN_EXPLORER_ENGINE="$tmp/engine.html"
 
@@ -85,7 +85,7 @@ check "restart reuses token (cookie still valid)" "$(code -H "Cookie: $cookie" "
 
 # ── exec adapter: any agent CLI; prompt on stdin, stdout is the reply ──
 mkdir -p "$tmp/ex"
-cp "$S/examples/plan.js" "$tmp/ex/"
+cp "$S/examples/review/plan.js" "$tmp/ex/"
 node "$LIVE" "$tmp/ex" --port 0 --exec 'grep -o "Note: .*" | sed "s/^/ECHO /"' > "$tmp/ex.log" 2>&1 &
 pids+=($!)
 for _ in $(seq 80); do grep -q '"ready"' "$tmp/ex.log" 2>/dev/null && break; sleep 0.1; done

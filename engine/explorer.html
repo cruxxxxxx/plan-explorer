@@ -23,6 +23,7 @@
   --accent: #c2553d; --tint: #c2553d17; --on-accent: #ffffff;
   --m-q: #c2553d; --m-c: #b9822c; --m-i: #4b6f9e; --m-y: #4f8768; --m-x: #8f8b83; --m-n: #3a3833;
   --sev-high: #a8442e; --sev-high-bg: #f5e2db; --sev-med: #8a6118; --sev-med-bg: #f4eadb; --sev-low: #47658c; --sev-low-bg: #e4ebf2;
+  --ty-new: #3d7552; --ty-new-bg: #e3efe7; --ty-change: #47658c; --ty-change-bg: #e8edf3; --ty-risk: #9a7a3c; --ty-risk-bg: #f6f0e4;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -32,6 +33,7 @@
     --accent: #df7f66; --tint: #df7f6624; --on-accent: #161614;
     --m-q: #df7f66; --m-c: #d9a85a; --m-i: #86a5d1; --m-y: #84b599; --m-x: #8a867e; --m-n: #cfccc4;
     --sev-high: #eb9c87; --sev-high-bg: #35231d; --sev-med: #e0bd7e; --sev-med-bg: #332a1b; --sev-low: #9db8db; --sev-low-bg: #1e2734;
+    --ty-new: #8fc7a2; --ty-new-bg: #1c2a21; --ty-change: #9db8db; --ty-change-bg: #1e2531; --ty-risk: #cdb17a; --ty-risk-bg: #2a251b;
     color-scheme: dark;
   }
 }
@@ -41,6 +43,7 @@
   --accent: #df7f66; --tint: #df7f6624; --on-accent: #161614;
   --m-q: #df7f66; --m-c: #d9a85a; --m-i: #86a5d1; --m-y: #84b599; --m-x: #8a867e; --m-n: #cfccc4;
   --sev-high: #eb9c87; --sev-high-bg: #35231d; --sev-med: #e0bd7e; --sev-med-bg: #332a1b; --sev-low: #9db8db; --sev-low-bg: #1e2734;
+  --ty-new: #8fc7a2; --ty-new-bg: #1c2a21; --ty-change: #9db8db; --ty-change-bg: #1e2531; --ty-risk: #cdb17a; --ty-risk-bg: #2a251b;
   color-scheme: dark;
 }
 
@@ -201,6 +204,15 @@ h1 { font-size: clamp(40px, 6vw, 76px); line-height: .98; letter-spacing: -.045e
 .sev-high { --sev: var(--sev-high); --sev-bg: var(--sev-high-bg); }
 .sev-medium { --sev: var(--sev-med); --sev-bg: var(--sev-med-bg); }
 .sev-low { --sev: var(--sev-low); --sev-bg: var(--sev-low-bg); }
+/* work items (implementation plans): neutral tones, nothing reads as an alarm */
+.ty-new { --sev: var(--ty-new); --sev-bg: var(--ty-new-bg); }
+.ty-change { --sev: var(--ty-change); --sev-bg: var(--ty-change-bg); }
+.ty-remove { --sev: var(--ink-3); --sev-bg: var(--panel); }
+.ty-decision { --sev: var(--ink-2); --sev-bg: var(--panel); }
+.ty-risk { --sev: var(--ty-risk); --sev-bg: var(--ty-risk-bg); }
+.ty-risk .idot, .ty-risk.sevpill::before, .sevchip.ty-risk .idot { background: transparent !important; box-shadow: inset 0 0 0 2px var(--sev); }
+svg .stepdot.ty-risk circle { fill: var(--bg); stroke: var(--sev); stroke-width: 2.5px; }
+.ty-remove .it { text-decoration: line-through; text-decoration-color: var(--ink-3); }
 .issue { border-left: 3px solid var(--sev, var(--rule-soft)); background: linear-gradient(90deg, var(--sev-bg, transparent), transparent 70%); padding: 14px 18px 16px; margin: 0 0 14px; scroll-margin-top: 24px; }
 .issue-title { font-size: 19px; font-weight: 500; letter-spacing: -.01em; line-height: 1.3; margin: 0 0 6px; }
 .issue-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; color: var(--ink-2); margin-bottom: 10px; }
@@ -219,9 +231,10 @@ h1 { font-size: clamp(40px, 6vw, 76px); line-height: .98; letter-spacing: -.045e
 .issue-rel { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-3); }
 .issue-rel a { font-size: 12px; text-decoration: none; border: 1px solid var(--rule-soft); padding: 1px 7px; color: var(--ink-2); }
 .issue-rel a:hover { border-color: var(--ink-3); color: var(--ink); }
-.issue.st-fixed, .issue.st-wontfix { opacity: .62; }
+.issue.st-fixed, .issue.st-wontfix, .issue.st-done, .issue.st-dropped { opacity: .62; }
 .istatus { font-size: 12px; color: var(--ink-3); }
-.istatus.fixed { color: var(--m-y); }
+.istatus.fixed, .istatus.done { color: var(--m-y); }
+.istatus.doing { color: var(--accent); }
 .sevbar { display: flex; gap: 6px; margin: 8px 0 0; flex-wrap: wrap; }
 
 /* ── API docs ────────────────────────────────────────── */
@@ -359,6 +372,12 @@ svg .stepdot { cursor: pointer; }
 .tdh:hover { color: var(--ink); }
 .tdh .car { width: 10px; color: var(--ink-3); }
 .tdh .cnt { margin-left: auto; }
+.tdh .dl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tkids { margin-left: 4px; padding-left: 8px; border-left: 1px solid var(--rule-soft); }
+.tkids.flat { margin-left: 0; padding-left: 0; border-left: 0; }
+.trow { padding-left: 6px !important; }
+.trow .tn { flex: 0 1 auto; min-width: 4ch; }
+.trow .tfile { flex: 1 9 0; min-width: 0; }
 .trow { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 16px; text-decoration: none; color: var(--ink); font-family: var(--mono); font-size: 13px; border-radius: 4px; }
 .trow:hover { background: var(--panel); }
 .trow.on { background: var(--ink); color: var(--bg); }
@@ -468,7 +487,7 @@ body.notemode::after { content: ""; position: fixed; inset: 0; border: 3px solid
 <script>
 (() => {
 "use strict";
-const ENGINE_VERSION = "2.2.0";
+const ENGINE_VERSION = "2.3.0";
 let P = window.PLAN;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -589,7 +608,7 @@ const areaById = id => areas().find(a => a.id === id);
 const isChanged = o => o && o.rev != null && P.version != null && Number(o.rev) === Number(P.version);
 const chg = o => (isChanged(o) ? `<span class="tag new">Changed v${esc(P.version)}</span>` : "");
 function areaChanged(a) {
-  const kids = [...(a.flows || []), ...(a.issues || []), ...(a.sections || []), ...(a.options || []), ...(a.openQuestions || [])];
+  const kids = [...(a.flows || []), ...itemsOf(a), ...(a.sections || []), ...(a.options || []), ...(a.openQuestions || [])];
   return isChanged(a) || kids.some(isChanged);
 }
 const statusTag = s => (s ? `<span class="tag st-${esc(s)}">${esc(s)}</span>` : "");
@@ -639,18 +658,53 @@ const sevRank = s => {
   const i = SEVERITIES.indexOf(sevKey(s));
   return i < 0 ? 3 : i;
 };
-const bySev = (x, y) => sevRank((x.i || x).severity) - sevRank((y.i || y).severity);
 const sevClass = s => (SEVERITIES.includes(sevKey(s)) ? `sev-${sevKey(s)}` : "");
 const sevLabel = s => (s ? String(s)[0].toUpperCase() + String(s).slice(1) : "");
 const ORIGIN = { "pre-existing": "Also on base", introduced: "Introduced here" };
 const ISSUE_FIELDS = [["trigger", "When"], ["cause", "Cause"], ["impact", "Impact"], ["fix", "Fix"], ["verify", "Verify"]];
-const allIssues = () => areas().flatMap(a => (a.issues || []).map(i => ({ a, i })));
-const isOpenIssue = i => !i.status || i.status === "open" || i.status === "fixing";
-const issueNid = (a, i) => `areas/${a.id}/issues/${i.id}`;
+
+// Items pinned to flows come in two kinds, and the data decides which:
+//   areas[].issues → findings (reviews, audits): severity, origin, open → fixed.
+//   areas[].work   → work (implementation plans): new / change / remove / risk / decision, todo → done.
+// Work never borrows severity colours, so a plan doesn't read like a bug report.
+const WORK_TYPES = ["new", "change", "remove", "risk", "decision"];
+const WORK_LABEL = { new: "New", change: "Change", remove: "Remove", risk: "Risk", decision: "Decision" };
+const WORK_FIELDS = [["why", "Why"], ["how", "How"], ["impact", "Impact"], ["mitigation", "Mitigation"], ["verify", "Done when"]];
+const SRC = new WeakMap();
+function itemsOf(a) {
+  const out = [];
+  for (const key of ["issues", "work"]) {
+    for (const i of a[key] || []) {
+      SRC.set(i, key);
+      out.push(i);
+    }
+  }
+  return out;
+}
+const isFinding = i => SRC.get(i) !== "work";
+const workType = i => (WORK_TYPES.includes(i.type) ? i.type : "change");
+const toneOf = i => (isFinding(i) ? sevClass(i.severity) : `ty-${workType(i)}`);
+const tagOf = i => (isFinding(i) ? sevLabel(i.severity) : WORK_LABEL[workType(i)]);
+// Findings sort by severity; work sorts by where it happens in its flow.
+const rankOf = i => (isFinding(i) ? [0, sevRank(i.severity), 0] : [1, Math.min(99, ...(i.steps || [99]).map(Number)), WORK_TYPES.indexOf(workType(i))]);
+const bySev = (x, y) => {
+  const p = rankOf(x.i || x);
+  const q = rankOf(y.i || y);
+  return p[0] - q[0] || p[1] - q[1] || p[2] - q[2];
+};
+const isOpenIssue = i => (isFinding(i) ? !i.status || i.status === "open" || i.status === "fixing" : i.status !== "done" && i.status !== "dropped");
+const allIssues = () => areas().flatMap(a => itemsOf(a).map(i => ({ a, i })));
+const issueNid = (a, i) => `areas/${a.id}/${SRC.get(i) || "issues"}/${i.id}`;
 function findIssue(areaId, id) {
   const a = areaById(areaId);
-  const i = a && (a.issues || []).find(x => x.id === id);
+  const i = a && itemsOf(a).find(x => x.id === id);
   return i ? { a, i } : null;
+}
+// What to call the pinned items, from what the plan actually holds.
+function itemWord(list) {
+  const f = list.some(isFinding);
+  const w = list.some(i => !isFinding(i));
+  return f && w ? "Items" : w || (!f && P.kind === "plan") ? "Work" : "Issues";
 }
 const apiTypes = () => (P.api && P.api.types) || [];
 const typeById = id => apiTypes().find(t => t.id === id);
@@ -663,7 +717,7 @@ function flowOfIssue(a, i) {
   return (a.flows || []).find(f => i.flow === f.id || i.flow === `${a.id}/${f.id}`) || null;
 }
 function issuesForFlow(a, f) {
-  return (a.issues || []).filter(i => flowOfIssue(a, i) === f);
+  return itemsOf(a).filter(i => flowOfIssue(a, i) === f);
 }
 function issuesAtStep(a, f, k) {
   return issuesForFlow(a, f).filter(i => (i.steps || []).map(Number).includes(k + 1)).sort(bySev);
@@ -755,14 +809,17 @@ function sectionBlock(a, s) {
 function issueRow(a, i) {
   const where = [].concat(i.where || []);
   const label = `${a.title} › ${i.title}`;
-  return `<button class="irow ${sevClass(i.severity)}${isOpenIssue(i) ? "" : " closed"}" data-open-issue="${esc(a.id)}/${esc(i.id)}"${reg(issueNid(a, i), label, i.title)}>
+  const meta = isFinding(i)
+    ? [i.category ? esc(i.category) : "", where[0] ? `<code>${esc(fileOf(where[0]).split("/").pop())}</code>` : "", i.origin === "pre-existing" ? "on base" : "", isOpenIssue(i) ? "" : esc(i.status)]
+    : [esc(tagOf(i)), where[0] ? `<code>${esc(fileOf(where[0]).split("/").pop())}</code>` : "", i.status && i.status !== "todo" ? esc(i.status) : ""];
+  return `<button class="irow ${toneOf(i)}${isOpenIssue(i) ? "" : " closed"}" data-open-issue="${esc(a.id)}/${esc(i.id)}"${reg(issueNid(a, i), label, i.title)}>
     <span class="idot"></span><span class="it">${inline(i.title)}</span>
-    <span class="im">${[i.category ? esc(i.category) : "", where[0] ? `<code>${esc(fileOf(where[0]).split("/").pop())}</code>` : "", i.origin === "pre-existing" ? "on base" : "", isOpenIssue(i) ? "" : esc(i.status)].filter(Boolean).join(" · ")}</span>${chg(i)}
+    <span class="im">${meta.filter(Boolean).join(" · ")}</span>${chg(i)}
   </button>`;
 }
 function issueRef(id) {
   for (const a of areas()) {
-    const hit = (a.issues || []).find(x => x.id === id);
+    const hit = itemsOf(a).find(x => x.id === id);
     if (hit) { return `<a href="#" data-open-issue="${esc(a.id)}/${esc(id)}">${esc(trunc(plain(hit.title), 52))}</a>`; }
     const q = (a.openQuestions || []).find(x => x.id === id);
     if (q) { return `<a href="#explore/${esc(a.id)}" data-focus-nid="areas/${esc(a.id)}/questions/${esc(id)}">${esc(trunc(plain(q.text), 52))}</a>`; }
@@ -774,13 +831,15 @@ function issueCard(a, i) {
   const b = issueNid(a, i);
   const label = `${a.title} › ${i.title}`;
   const where = [].concat(i.where || []);
-  const status = i.status && i.status !== "open" ? i.status : "";
+  const finding = isFinding(i);
+  const status = i.status && i.status !== "open" && i.status !== "todo" ? i.status : "";
   const flow = flowOfIssue(a, i);
   const types = typesForIssue(i);
-  return `<div class="issue ${sevClass(i.severity)}${status ? " st-" + esc(status) : ""}">
+  const fields = finding ? ISSUE_FIELDS : WORK_FIELDS;
+  return `<div class="issue ${toneOf(i)}${status ? " st-" + esc(status) : ""}">
     <h3 class="issue-title"${reg(b, label, i.title)}>${inline(i.title)}</h3>
     <div class="issue-meta">
-      ${i.severity ? `<span class="sevpill">${esc(sevLabel(i.severity))}</span>` : ""}
+      ${tagOf(i) ? `<span class="sevpill">${esc(tagOf(i))}</span>` : ""}
       ${i.category ? `<span class="cat">${esc(i.category)}</span>` : ""}
       ${i.origin ? `<span class="soft">${esc(ORIGIN[i.origin] || i.origin)}</span>` : ""}
       ${status ? `<span class="istatus ${esc(status)}">${esc(status)}</span>` : ""}
@@ -788,7 +847,7 @@ function issueCard(a, i) {
     </div>
     ${where.length ? `<div class="where">${where.map(w => `<code>${esc(w)}</code>`).join("")}</div>` : ""}
     ${i.summary ? `<div class="issue-sum">${md(i.summary, `${b}/summary`, `${label} › summary`)}</div>` : ""}
-    <dl class="ifields">${ISSUE_FIELDS.filter(([k]) => i[k]).map(([k, word]) =>
+    <dl class="ifields">${fields.filter(([k]) => i[k]).map(([k, word]) =>
       `<dt class="${k}">${word}</dt><dd>${md(i[k], `${b}/${k}`, `${label} › ${word}`)}</dd>`).join("")}</dl>
     ${flow ? `<div class="issue-rel"><span>Flow</span><a href="#explore/${esc(a.id)}" data-focus-nid="areas/${esc(a.id)}/flows/${esc(flow.id)}">${esc(flow.title)}${(i.steps || []).length ? ` · step ${i.steps.join(", ")}` : ""}</a></div>` : ""}
     ${types.length ? `<div class="issue-rel"><span>Types</span>${types.map(t => `<a href="#api/${esc(t.id)}" data-open-type="${esc(t.id)}">${esc(t.name)}</a>`).join("")}</div>` : ""}
@@ -797,16 +856,17 @@ function issueCard(a, i) {
 }
 
 // ── explore (home) ──────────────────────────────────────────────────────
-const ex = { q: "", kind: "all", sev: "all", cat: "all", status: "open", origin: "all" };
+const ex = { q: "", kind: "all", sev: "all", type: "all", cat: "all", status: "open", origin: "all" };
 const KINDS = [["all", "Everything"], ["flow", "Flows"], ["issue", "Issues"], ["question", "Questions"], ["option", "Options"], ["section", "Write-ups"], ["api", "API"]];
 function issuePass(i, q) {
-  return (ex.sev === "all" || sevKey(i.severity) === ex.sev) &&
+  return (ex.sev === "all" || (isFinding(i) && sevKey(i.severity) === ex.sev)) &&
+    (ex.type === "all" || (!isFinding(i) && workType(i) === ex.type)) &&
     (ex.cat === "all" || i.category === ex.cat) &&
     (ex.status === "all" || (ex.status === "open" ? isOpenIssue(i) : !isOpenIssue(i))) &&
     (ex.origin === "all" || i.origin === ex.origin) &&
-    (!q || has(q, i.title, i.summary, i.category, i.trigger, i.cause, i.impact, i.fix, i.verify, ...[].concat(i.where || [])));
+    (!q || has(q, i.title, i.summary, i.category, i.trigger, i.cause, i.impact, i.fix, i.why, i.how, i.mitigation, i.verify, ...[].concat(i.where || [])));
 }
-const issueFilterOn = () => ex.sev !== "all" || ex.cat !== "all" || ex.origin !== "all";
+const issueFilterOn = () => ex.sev !== "all" || ex.type !== "all" || ex.cat !== "all" || ex.origin !== "all";
 function chip(key, value, label, count) {
   return `<button class="chip${ex[key] === value ? " on" : ""}" data-ex="${key}:${esc(value)}">${esc(label)}${count != null ? `<span class="cc">${count}</span>` : ""}</button>`;
 }
@@ -814,10 +874,16 @@ function viewExplore(areaId) {
   const area = areaId ? areaById(areaId) : null;
   const o = P.overview || {};
   const scope = area ? [area] : areas();
-  const iss = scope.flatMap(a => (a.issues || []).map(i => ({ a, i })));
+  const iss = scope.flatMap(a => itemsOf(a).map(i => ({ a, i })));
+  const finds = iss.filter(x => isFinding(x.i));
+  const works = iss.filter(x => !isFinding(x.i));
   const cats = [...new Set(iss.map(x => x.i.category).filter(Boolean))].sort();
-  const origins = [...new Set(iss.map(x => x.i.origin).filter(Boolean))];
+  const origins = [...new Set(finds.map(x => x.i.origin).filter(Boolean))];
   const countBy = f => iss.filter(x => f(x.i)).length;
+  const word = itemWord(iss.map(x => x.i));
+  const openLabel = works.length && !finds.length ? "To do" : "Open";
+  const closedLabel = finds.length && !works.length ? "Fixed / won't fix" : works.length && !finds.length ? "Done" : "Closed";
+  const types = WORK_TYPES.filter(t => works.some(x => workType(x.i) === t));
   const idx = areas().indexOf(area);
   return `
   <div class="kicker"><span class="sq"></span>${area ? `Area ${pad(idx + 1)} / ${pad(areas().length)} ${statusTag(area.status)} ${chg(area)}` : `Plan${P.version != null ? ` · v${esc(P.version)}` : ""}${P.updated ? ` · ${esc(P.updated)}` : ""}`}</div>
@@ -825,13 +891,14 @@ function viewExplore(areaId) {
   ${area ? (area.summary ? `<div class="lede">${md(area.summary, `areas/${area.id}/summary`, `${area.title} › Summary`)}</div>` : "")
     : (o.summary ? `<div class="lede">${md(o.summary, "overview/summary", "Summary")}</div>` : "")}
   ${!area && ((o.goals || []).length || (o.nonGoals || []).length) ? `<details class="goals"><summary>Goals and non-goals</summary><div class="goalgrid"><div>${rows("Goals", o.goals, "overview/goals")}</div><div>${rows("Non-goals", o.nonGoals, "overview/nonGoals")}</div></div></details>` : ""}
-  <div class="xbar"><input class="search" id="exq" type="search" placeholder="Search issues, flows, questions, API…" value="${esc(ex.q)}" autocomplete="off"></div>
+  <div class="xbar"><input class="search" id="exq" type="search" placeholder="Search ${word.toLowerCase()}, flows, questions, API…" value="${esc(ex.q)}" autocomplete="off"></div>
   <div class="facets">
-    <div class="frow"><span class="kicker">Area</span><a class="chip${!area ? " on" : ""}" href="#explore">All</a>${areas().map(a => `<a class="chip${area === a ? " on" : ""}" href="#explore/${esc(a.id)}">${esc(a.title)}${(a.issues || []).filter(isOpenIssue).length ? `<span class="cc">${(a.issues || []).filter(isOpenIssue).length}</span>` : ""}</a>`).join("")}</div>
-    <div class="frow"><span class="kicker">Show</span>${KINDS.filter(([k]) => k !== "api" || apiTypes().length).map(([k, l]) => chip("kind", k, l)).join("")}</div>
-    ${iss.length ? `<div class="frow"><span class="kicker">Severity</span>${chip("sev", "all", "Any")}${SEVERITIES.map(s => `<button class="chip sevchip ${sevClass(s)}${ex.sev === s ? " on" : ""}" data-ex="sev:${s}"><span class="idot"></span>${sevLabel(s)}<span class="cc">${countBy(i => sevKey(i.severity) === s && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
+    <div class="frow"><span class="kicker">Area</span><a class="chip${!area ? " on" : ""}" href="#explore">All</a>${areas().map(a => `<a class="chip${area === a ? " on" : ""}" href="#explore/${esc(a.id)}">${esc(a.title)}${itemsOf(a).filter(isOpenIssue).length ? `<span class="cc">${itemsOf(a).filter(isOpenIssue).length}</span>` : ""}</a>`).join("")}</div>
+    <div class="frow"><span class="kicker">Show</span>${KINDS.filter(([k]) => (k !== "api" || apiTypes().length) && (k !== "issue" || iss.length)).map(([k, l]) => chip("kind", k, k === "issue" ? word : l)).join("")}</div>
+    ${types.length ? `<div class="frow"><span class="kicker">Type</span>${chip("type", "all", "Any")}${types.map(t => `<button class="chip sevchip ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}"><span class="idot"></span>${WORK_LABEL[t]}<span class="cc">${countBy(i => !isFinding(i) && workType(i) === t && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
+    ${finds.length ? `<div class="frow"><span class="kicker">Severity</span>${chip("sev", "all", "Any")}${SEVERITIES.map(s => `<button class="chip sevchip ${sevClass(s)}${ex.sev === s ? " on" : ""}" data-ex="sev:${s}"><span class="idot"></span>${sevLabel(s)}<span class="cc">${countBy(i => isFinding(i) && sevKey(i.severity) === s && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
     ${cats.length > 1 ? `<div class="frow"><span class="kicker">Category</span>${chip("cat", "all", "Any")}${cats.map(c => chip("cat", c, c, countBy(i => i.category === c && isOpenIssue(i)))).join("")}</div>` : ""}
-    ${iss.length ? `<div class="frow"><span class="kicker">Status</span>${chip("status", "open", "Open", countBy(isOpenIssue))}${chip("status", "closed", "Fixed / won't fix", countBy(i => !isOpenIssue(i)))}${chip("status", "all", "All")}${origins.length ? `<span class="fsep"></span>${chip("origin", "all", "Any origin")}${origins.map(v => chip("origin", v, ORIGIN[v] || v, countBy(i => i.origin === v))).join("")}` : ""}</div>` : ""}
+    ${iss.length ? `<div class="frow"><span class="kicker">Status</span>${chip("status", "open", openLabel, countBy(isOpenIssue))}${chip("status", "closed", closedLabel, countBy(i => !isOpenIssue(i)))}${chip("status", "all", "All")}${origins.length ? `<span class="fsep"></span>${chip("origin", "all", "Any origin")}${origins.map(v => chip("origin", v, ORIGIN[v] || v, countBy(i => i.origin === v))).join("")}` : ""}</div>` : ""}
   </div>
   <div id="ex-results">${exploreResults(area)}</div>`;
 }
@@ -842,7 +909,7 @@ function exploreResults(area) {
   const blocks = [];
   for (const a of area ? [area] : areas()) {
     const parts = [];
-    const issues = (a.issues || []).filter(i => issuePass(i, q)).sort(bySev);
+    const issues = itemsOf(a).filter(i => issuePass(i, q)).sort(bySev);
     const shownFlows = [];
     if (want("flow")) {
       for (const f of a.flows || []) {
@@ -858,7 +925,7 @@ function exploreResults(area) {
       const inShown = new Set(shownFlows.flatMap(x => x.linked));
       const loose = issues.filter(i => !inShown.has(i));
       if (loose.length) {
-        parts.push(`<div class="irows">${shownFlows.length ? `<div class="kicker">${ex.kind === "issue" ? "Issues" : "Not in a flow"}</div>` : ""}${loose.map(i => issueRow(a, i)).join("")}</div>`);
+        parts.push(`<div class="irows">${shownFlows.length ? `<div class="kicker">${ex.kind === "issue" ? itemWord(loose) : "Not in a flow"}</div>` : ""}${loose.map(i => issueRow(a, i)).join("")}</div>`);
       }
     }
     if (!strict) {
@@ -878,9 +945,11 @@ function exploreResults(area) {
       }
     }
     if (!parts.length) { continue; }
-    const open = (a.issues || []).filter(isOpenIssue);
-    const pills = SEVERITIES.map(s => [s, open.filter(i => sevKey(i.severity) === s).length]).filter(([, n]) => n)
-      .map(([s, n]) => `<button class="sevpill ${sevClass(s)}${ex.sev === s ? " on" : ""}" data-ex="sev:${s}">${n} ${s}</button>`).join("");
+    const open = itemsOf(a).filter(isOpenIssue);
+    const pills = SEVERITIES.map(s => [s, open.filter(i => isFinding(i) && sevKey(i.severity) === s).length]).filter(([, n]) => n)
+      .map(([s, n]) => `<button class="sevpill ${sevClass(s)}${ex.sev === s ? " on" : ""}" data-ex="sev:${s}">${n} ${s}</button>`).join("") +
+      WORK_TYPES.map(t => [t, open.filter(i => !isFinding(i) && workType(i) === t).length]).filter(([, n]) => n)
+        .map(([t, n]) => `<button class="sevpill ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}">${n} ${WORK_LABEL[t].toLowerCase()}</button>`).join("");
     blocks.push(`<section class="xarea">
       ${area ? (pills ? `<div class="xpills">${pills}</div>` : "") : `<div class="xhead"><a class="xn" href="#explore/${esc(a.id)}">${pad(areas().indexOf(a) + 1)}</a><a class="xt" href="#explore/${esc(a.id)}"${reg(`areas/${a.id}`, a.title, a.title)}>${esc(a.title)}</a><span class="xpills">${statusTag(a.status)}${pills}${chg(a)}</span></div>
       ${a.summary ? `<p class="xsum">${inline(firstPara(a.summary))}</p>` : ""}`}
@@ -984,7 +1053,7 @@ function typeDetail(t, level, inDrawer) {
     ${level === "full" && t.body ? `<div class="prose">${md(t.body, `${b}/body`, `API › ${t.name}`)}</div>` : ""}
     ${depsHtml(t)}
     ${members.length ? `<div class="tsec"><div class="tsec-h"><span class="kicker">Members · ${members.length}</span>${inDrawer ? "" : levelSeg()}</div>${membersTable(t, members, level)}</div>` : ""}
-    ${issues.length ? `<div class="tsec"><div class="kicker">Issues · ${issues.length}</div><div class="irows">${issues.map(x => issueRow(x.a, x.i)).join("")}</div></div>` : ""}
+    ${issues.length ? `<div class="tsec"><div class="kicker">${itemWord(issues.map(x => x.i))} · ${issues.length}</div><div class="irows">${issues.map(x => issueRow(x.a, x.i)).join("")}</div></div>` : ""}
     ${flows.length ? `<div class="tsec"><div class="kicker">In flows</div><div class="deps">${flows.map(x => `<a class="dep" href="#explore/${esc(x.a.id)}" data-focus-nid="areas/${esc(x.a.id)}/flows/${esc(x.f.id)}">${esc(x.f.title)}</a>`).join("")}</div></div>` : ""}
     ${inDrawer ? `<p class="drmore"><a class="lnk" href="#api/${esc(t.id)}">Open in API explorer →</a></p>` : ""}
   </div>`;
@@ -1078,19 +1147,36 @@ function treeHtml(sel) {
     }
     node.types.push(t);
   }
+  // Merge single-child folder chains ("Grid/Cells/Logic") so deep paths don't eat the width.
+  const compact = node => {
+    for (const [k, d] of [...node.dirs]) {
+      let c = d;
+      let label = k;
+      while (!c.types.length && c.dirs.size === 1) {
+        const [ck, cd] = [...c.dirs][0];
+        label = `${label}/${ck}`;
+        c = cd;
+      }
+      c.label = label;
+      node.dirs.set(k, c);
+      compact(c);
+    }
+  };
+  compact(root);
   const count = n => n.types.length + [...n.dirs.values()].reduce((s, d) => s + count(d), 0);
   const typeRow = t => {
     const iss = issuesForType(t).filter(x => isOpenIssue(x.i));
     const file = rel().file(t);
+    const tone = iss.length ? toneOf(iss[0].i) : "";
     return `<a class="trow${sel === t ? " on" : ""}" href="#api/${esc(t.id)}" title="${esc(t.source || t.name)}">
       <span class="tn">${hits(t.name, q)}</span>${t.state && t.state !== "existing" ? `<span class="tstate s-${esc(t.state)}"></span>` : ""}
       ${file && squash(file.replace(/\.\w+$/, "")) !== squash(t.name.replace(/<.*>/, "")) ? `<span class="tfile">${esc(file)}</span>` : ""}
-      ${iss.length ? `<span class="tiss ${sevClass(iss[0].i.severity)}">${iss.length}</span>` : ""}</a>`;
+      ${iss.length ? `<span class="tiss ${tone}">${iss.length}</span>` : ""}</a>`;
   };
   const walk = (node, depth) => [...node.dirs.values()].sort((x, y) => x.path.localeCompare(y.path)).map(d => {
     const closed = apiTree.closed.has(d.path) && !q;
-    return `<div class="tdir${closed ? " closed" : ""}"><button class="tdh" data-tree-dir="${esc(d.path)}" style="padding-left:${depth * 12}px"><span class="car">${closed ? "▸" : "▾"}</span>${esc(d.path.split("/").pop())}<span class="cnt">${count(d)}</span></button>
-      ${closed ? "" : `<div class="tkids" style="padding-left:${depth * 12}px">${walk(d, depth + 1)}${d.types.map(typeRow).join("")}</div>`}</div>`;
+    return `<div class="tdir${closed ? " closed" : ""}"><button class="tdh" data-tree-dir="${esc(d.path)}" title="${esc(d.path)}"><span class="car">${closed ? "▸" : "▾"}</span><span class="dl">${esc(d.label || d.path.split("/").pop())}</span><span class="cnt">${count(d)}</span></button>
+      ${closed ? "" : `<div class="tkids${depth >= 2 ? " flat" : ""}">${walk(d, depth + 1)}${d.types.map(typeRow).join("")}</div>`}</div>`;
   }).join("") + (depth === 0 ? node.types.map(typeRow).join("") : "");
   return walk(root, 0) || `<p class="muted">No match.</p>`;
 }
@@ -1236,7 +1322,7 @@ function renderSide(r) {
     <div class="ptitle">${esc(P.title)}</div>
     <div class="pmeta">${P.version != null ? "v" + esc(P.version) : ""}${P.updated ? " · " + esc(P.updated) : ""}</div>
     <nav>
-      ${item("explore", "Explore", openIssues ? `<span class="cnt" title="open issues">${openIssues}</span>` : "", cur === "explore")}
+      ${item("explore", "Explore", openIssues ? `<span class="cnt" title="open ${itemWord(allIssues().map(x => x.i)).toLowerCase()}">${openIssues}</span>` : "", cur === "explore")}
       ${apiTypes().length ? item("api", "API", `<span class="cnt">${apiTypes().length}</span>`, cur === "api") : ""}
       ${(P.roadmap || []).length ? item("roadmap", "Roadmap", "", cur === "roadmap") : ""}
       ${item("notes", "Notes", `<span class="cnt${open ? " hot" : ""}" title="${open} open">${notes.length}</span>`, cur === "notes")}
@@ -1402,7 +1488,7 @@ function stampSeq(c, b, f) {
     if (!list.length) { return; }
     const bb = el.getBBox();
     const g = document.createElementNS(SVGNS, "g");
-    g.setAttribute("class", `stepdot ${sevClass(list[0].severity)}`);
+    g.setAttribute("class", `stepdot ${toneOf(list[0])}`);
     g.setAttribute("data-nid", `${b}/msg/${k}`);
     const r = list.length > 1 ? 7 : 5;
     const cx = bb.x + bb.width + r + 5;
@@ -1561,7 +1647,7 @@ function noteCountFor(nid) {
   return n ? `<div class="tipn">✎ ${n} note${n > 1 ? "s" : ""}</div>` : "";
 }
 function tipIssues(list) {
-  return list.length ? `<div class="tipis">${list.map(i => `<div class="${sevClass(i.severity)}"><span class="idot"></span>${inline(i.title)}</div>`).join("")}</div>` : "";
+  return list.length ? `<div class="tipis">${list.map(i => `<div class="${toneOf(i)}"><span class="idot"></span>${inline(i.title)}</div>`).join("")}</div>` : "";
 }
 function typeTip(t) {
   const iss = issuesForType(t).filter(x => isOpenIssue(x.i));
@@ -2013,14 +2099,14 @@ function gotoNote(n) {
 function focusNid(nid) {
   pendingFocus = nid;
   const route = (INDEX.get(nid) || {}).route || "explore";
-  Object.assign(ex, { q: "", kind: "all", sev: "all", cat: "all", status: "all", origin: "all" });
+  Object.assign(ex, { q: "", kind: "all", sev: "all", type: "all", cat: "all", status: "all", origin: "all" });
   apiTree.q = "";
   closeDrawer();
   if (location.hash.slice(1) === route) { render(false); } else { location.hash = route; }
 }
 function focusPending(final) {
   if (!pendingFocus) { return; }
-  const im = pendingFocus.match(/^areas\/([^/]+)\/issues\/([^/]+)\/./);
+  const im = pendingFocus.match(/^areas\/([^/]+)\/(?:issues|work)\/([^/]+)\/./);
   if (im && drawer.hidden) { openDrawer({ kind: "issue", area: im[1], id: im[2] }, false); }
   const el = targetsFor(pendingFocus)[0];
   if (!el) {
@@ -2355,7 +2441,7 @@ function render(resetScroll, keepY) {
 }
 function buildIndex() {
   const keep = { ...ex };
-  Object.assign(ex, { q: "", kind: "all", sev: "all", cat: "all", status: "all", origin: "all" });
+  Object.assign(ex, { q: "", kind: "all", sev: "all", type: "all", cat: "all", status: "all", origin: "all" });
   viewExplore("");
   areas().forEach(a => viewExplore(a.id));
   allIssues().forEach(x => issueCard(x.a, x.i));
