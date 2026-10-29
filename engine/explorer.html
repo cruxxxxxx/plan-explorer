@@ -511,7 +511,7 @@ body.notemode::after { content: ""; position: fixed; inset: 0; border: 3px solid
 <script>
 (() => {
 "use strict";
-const ENGINE_VERSION = "2.4.1";
+const ENGINE_VERSION = "2.5.0";
 let P = window.PLAN;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -633,8 +633,39 @@ function md(text, base, label) {
 // ── plan helpers ────────────────────────────────────────────────────────
 const areas = () => P.areas || [];
 const areaById = id => areas().find(a => a.id === id);
-const isChanged = o => o && o.rev != null && P.version != null && Number(o.rev) === Number(P.version);
-const chg = o => (isChanged(o) ? `<span class="tag new">Changed v${esc(P.version)}</span>` : "");
+// Live bookkeeping: live.mjs appends window.PLAN_AUTO = { version, updated, changed: [key] } to the plan.js it
+// serves, so the agent never maintains version, updated or rev by hand. A file:// page has none and uses rev.
+let AUTO = null;
+let autoChanged = new WeakSet();
+function applyAuto() {
+  AUTO = window.PLAN_AUTO && typeof window.PLAN_AUTO === "object" ? window.PLAN_AUTO : null;
+  autoChanged = new WeakSet();
+  if (!AUTO) { return; }
+  const keys = new Set(AUTO.changed || []);
+  const mark = (o, key) => {
+    if (o && typeof o === "object" && keys.has(key)) { autoChanged.add(o); }
+  };
+  const kidLists = { flows: "flows", issues: "issues", work: "work", sections: "sections", options: "options", openQuestions: "questions" };
+  for (const a of P.areas || []) {
+    mark(a, `areas/${a.id}`);
+    for (const [field, seg] of Object.entries(kidLists)) {
+      for (const o of a[field] || []) { mark(o, `areas/${a.id}/${seg}/${o && o.id}`); }
+    }
+  }
+  for (const t of (P.api || {}).types || []) {
+    mark(t, `api/${t.id}`);
+    for (const m of t.members || []) { mark(m, `api/${t.id}/m/${m && m.id}`); }
+  }
+  for (const s of P.roadmap || []) { mark(s, `roadmap/${s.id}`); }
+}
+const planVersion = () => {
+  const own = P.version != null ? Number(P.version) : null;
+  if (!AUTO || AUTO.version == null) { return P.version; }
+  return own != null && own > Number(AUTO.version) ? own : AUTO.version;
+};
+const planUpdated = () => (AUTO && AUTO.updated) || P.updated;
+const isChanged = o => o && (autoChanged.has(o) || (o.rev != null && planVersion() != null && Number(o.rev) === Number(planVersion())));
+const chg = o => (isChanged(o) ? `<span class="tag new">Changed v${esc(planVersion())}</span>` : "");
 function areaChanged(a) {
   const kids = [...(a.flows || []), ...itemsOf(a), ...(a.sections || []), ...(a.options || []), ...(a.openQuestions || [])];
   return isChanged(a) || kids.some(isChanged);
@@ -922,7 +953,7 @@ function viewExplore(areaId) {
   ].filter(Boolean);
   const idx = areas().indexOf(area);
   return `
-  <div class="kicker"><span class="sq"></span>${area ? `Area ${pad(idx + 1)} / ${pad(areas().length)} ${statusTag(area.status)} ${chg(area)}` : `Plan${P.version != null ? ` · v${esc(P.version)}` : ""}${P.updated ? ` · ${esc(P.updated)}` : ""}`}</div>
+  <div class="kicker"><span class="sq"></span>${area ? `Area ${pad(idx + 1)} / ${pad(areas().length)} ${statusTag(area.status)} ${chg(area)}` : `Plan${planVersion() != null ? ` · v${esc(planVersion())}` : ""}${planUpdated() ? ` · ${esc(planUpdated())}` : ""}`}</div>
   ${area ? `<h1${reg(`areas/${area.id}`, area.title, area.title)}>${esc(area.title)}</h1>` : `<h1${reg("overview/title", "Title", P.title)}>${esc(P.title)}</h1>`}
   ${area ? (area.summary ? `<div class="lede">${md(area.summary, `areas/${area.id}/summary`, `${area.title} › Summary`)}</div>` : "")
     : (o.summary ? `<div class="lede">${md(o.summary, "overview/summary", "Summary")}</div>` : "")}
@@ -1380,7 +1411,7 @@ function renderSide(r) {
   $("#side").innerHTML = `
     <div class="brand"><span class="sq"></span><span class="kicker">Plan Explorer</span></div>
     <div class="ptitle">${esc(P.title)}</div>
-    <div class="pmeta">${P.version != null ? "v" + esc(P.version) : ""}${P.updated ? " · " + esc(P.updated) : ""}</div>
+    <div class="pmeta">${planVersion() != null ? "v" + esc(planVersion()) : ""}${planUpdated() ? " · " + esc(planUpdated()) : ""}</div>
     <nav>
       ${item("explore", "Explore", openIssues ? `<span class="cnt" title="open ${itemWord(allIssues().map(x => x.i)).toLowerCase()}">${openIssues}</span>` : "", cur === "explore")}
       ${apiTypes().length ? item("api", "API", `<span class="cnt">${apiTypes().length}</span>`, cur === "api") : ""}
@@ -2224,7 +2255,7 @@ function exportPayload() {
     engine: ENGINE_VERSION,
     plan: P.id || null,
     title: P.title,
-    planVersion: P.version ?? null,
+    planVersion: planVersion() ?? null,
     page: decodeURIComponent(location.pathname),
     exportedAt: now(),
     counts: { total: list.length, open: count(n => n.status === "open"), answered: count(n => n.status === "answered"), resolved: count(n => n.status === "resolved"), orphaned: count(n => n.anchorState === "orphaned") },
@@ -2618,7 +2649,7 @@ const live = (() => {
     L.pending.add(n.id);
     delete L.answers[n.id];
     refresh();
-    api("live/ask", { method: "POST", body: JSON.stringify({ note: ex, target: hit ? hit.text : "", route: location.hash, plan: P.id || null, planVersion: P.version ?? null }) })
+    api("live/ask", { method: "POST", body: JSON.stringify({ note: ex, target: hit ? hit.text : "", route: location.hash, plan: P.id || null, planVersion: planVersion() ?? null }) })
       .then(r => r.json())
       .then(j => toast(j.agent === "offline" ? "Saved. The agent gets it when it's back." : "Sent"))
       .catch(() => toast("Couldn't reach the live server"));
@@ -2642,20 +2673,22 @@ const live = (() => {
         toast("plan.js has an error. Keeping the last good version.");
         return;
       }
-      const before = P.version;
+      const before = planVersion();
       P = window.PLAN;
+      applyAuto();
       document.title = P.title || "Plan Explorer";
       INDEX.clear();
       FLOWS.clear();
       buildIndex();
       render(false, scrollY);
-      toast(P.version !== before ? `Plan updated to v${P.version}` : "Plan updated");
+      toast(planVersion() !== before ? `Plan updated to v${planVersion()}` : "Plan updated");
     };
     s.onerror = () => {
       s.remove();
       toast("plan.js failed to load. Keeping the last good version.");
     };
     window.PLAN = null;
+    window.PLAN_AUTO = null;
     document.head.appendChild(s);
   }
   function connect() {
@@ -2741,6 +2774,7 @@ addEventListener("storage", e => {
 // Pure helpers, reachable from the engine tests.
 window.planExplorer = Object.freeze({ version: ENGINE_VERSION, parsePrefix, inline });
 
+applyAuto();
 buildIndex();
 live.start();
 addEventListener("hashchange", () => render(true));

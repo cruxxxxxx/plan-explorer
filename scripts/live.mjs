@@ -5,6 +5,8 @@
 //
 //   node live.mjs <dir> [--exec "<agent cmd>"]   start or reuse the server, print the URL, then stream notes
 //   node live.mjs reply <dir> <noteId> [--status working|done] [text | -]
+//   node live.mjs replies <dir> [--status working] -   answer several notes (stdin: "--- <noteId>" blocks or JSON)
+//   node live.mjs log <dir> "what changed"        optional: one changelog entry for the current round
 //   node live.mjs status <dir>
 //   node live.mjs stop <dir>
 //   node live.mjs serve <dir> [--port N]         the server itself, in the foreground
@@ -13,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -21,10 +24,12 @@ const ENGINE = process.env.PLAN_EXPLORER_ENGINE || path.join(path.dirname(SELF),
 const USAGE = `usage:
   node live.mjs <dir> [--exec "<agent cmd>"]
   node live.mjs reply  <dir> <noteId> [--status working|done] [text | -]
+  node live.mjs replies <dir> [--status working] -   (stdin: "--- <noteId>" then the text, repeated; or {"<noteId>": "text"})
+  node live.mjs log    <dir> "what changed"
   node live.mjs status <dir>
   node live.mjs stop   <dir>
   node live.mjs serve  <dir> [--port N]`;
-const COMMANDS = ["serve", "listen", "reply", "status", "stop"];
+const COMMANDS = ["serve", "listen", "reply", "replies", "log", "status", "stop"];
 const argv = process.argv.slice(2);
 const cmd = COMMANDS.includes(argv[0]) ? argv.shift() : "open";
 const dirArg = argv.shift();
@@ -45,9 +50,17 @@ const F = {
   deleted: path.join(LIVE, "deleted.json"),
   lock: path.join(LIVE, "spawn.lock"),
   listener: path.join(LIVE, "listener.json"),
+  revs: path.join(LIVE, "revs.json"),
+  changelog: path.join(LIVE, "changelog.json"),
   plan: path.join(DIR, "plan.js")
 };
 const LISTENER_FRESH_MS = 15000;
+// Notes saved within this window reach the agent as one line (one Monitor event, one turn).
+const BATCH_MS = Number(process.env.PLAN_EXPLORER_BATCH_MS || 2000);
+// Edits more than this far apart start a new round: a new version, and a fresh set of "Changed" tags.
+const ROUND_GAP_MS = Number(process.env.PLAN_EXPLORER_ROUND_GAP_MS || 30 * 60 * 1000);
+// Note events carry at most this much of the element's text.
+const TARGET_CHARS = 200;
 // A server with no open page and no listener for this long shuts itself down.
 const IDLE_MS = 6 * 60 * 60 * 1000;
 // Single-quote for POSIX shells: the agent runs the reply command as given.
@@ -130,6 +143,85 @@ function preferredPort() {
   return 47100 + (h % 800);
 }
 
+// ── bookkeeping: version, updated and "Changed" tags without the agent ──
+// Runs plan.js in an empty context and returns window.PLAN (null if it doesn't run yet, e.g. mid-write).
+function evalPlan(src) {
+  try {
+    const ctx = { window: {} };
+    vm.runInNewContext(src, ctx, { filename: F.plan, timeout: 1000 });
+    const plan = ctx.window.PLAN;
+    return plan && typeof plan === "object" ? plan : null;
+  } catch (e) {
+    return null;
+  }
+}
+const BOOKKEEPING = new Set(["rev", "version", "updated", "changelog", "replies"]);
+const digest = v => crypto.createHash("sha1").update(JSON.stringify(v, (k, x) => (BOOKKEEPING.has(k) ? undefined : x)) ?? "").digest("base64url").slice(0, 16);
+const without = (o, keys) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !keys.includes(k)));
+// One fingerprint per item the page can tag, keyed like the engine's nids (areas/<a>/flows/<f>, api/<t>/m/<m>, …).
+// Containers are hashed without their children, so a changed flow doesn't tag its whole area.
+const AREA_KIDS = { flows: "flows", issues: "issues", work: "work", sections: "sections", options: "options", openQuestions: "questions" };
+function fingerprints(plan) {
+  const out = {};
+  const list = v => (Array.isArray(v) ? v.filter(x => x && typeof x === "object" && x.id != null) : []);
+  out.plan = digest(without(plan, ["areas", "api", "roadmap"]));
+  for (const a of list(plan.areas)) {
+    out[`areas/${a.id}`] = digest(without(a, Object.keys(AREA_KIDS)));
+    for (const [field, seg] of Object.entries(AREA_KIDS)) {
+      for (const o of list(a[field])) {
+        out[`areas/${a.id}/${seg}/${o.id}`] = digest(o);
+      }
+    }
+  }
+  const api = plan.api && typeof plan.api === "object" ? plan.api : {};
+  out.api = digest(without(api, ["types"]));
+  for (const t of list(api.types)) {
+    out[`api/${t.id}`] = digest(without(t, ["members"]));
+    for (const m of list(t.members)) {
+      out[`api/${t.id}/m/${m.id}`] = digest(m);
+    }
+  }
+  for (const r of list(plan.roadmap)) {
+    out[`roadmap/${r.id}`] = digest(r);
+  }
+  return out;
+}
+const today = (t = Date.now()) => {
+  const d = new Date(t);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+// Diffs the plan against the last snapshot (.live/revs.json). The first snapshot is the baseline: nothing is tagged.
+// A change after a quiet gap of ROUND_GAP_MS opens a new round (version + 1); a higher plan.version set by hand wins.
+function trackRevisions(plan, prev, now = Date.now()) {
+  const hashes = fingerprints(plan);
+  const own = Number.isFinite(Number(plan.version)) ? Number(plan.version) : 0;
+  if (!prev || !prev.hashes) {
+    return { hashes, revs: {}, round: Math.max(own, 1), lastChange: 0, updated: null };
+  }
+  const changed = Object.keys(hashes).filter(k => hashes[k] !== prev.hashes[k]);
+  const gone = Object.keys(prev.hashes).filter(k => !(k in hashes));
+  if (!changed.length && !gone.length) {
+    return own > prev.round ? { ...prev, round: own } : prev;
+  }
+  const fresh = !prev.lastChange || now - prev.lastChange > ROUND_GAP_MS;
+  const round = Math.max(fresh ? prev.round + 1 : prev.round, own);
+  const revs = { ...prev.revs };
+  for (const k of gone) {
+    delete revs[k];
+  }
+  for (const k of changed) {
+    revs[k] = round;
+  }
+  return { hashes, revs, round, lastChange: now, updated: today(now) };
+}
+// What the page needs, appended to the served plan.js as window.PLAN_AUTO.
+function autoInfo(state) {
+  if (!state) {
+    return null;
+  }
+  return { version: state.round, updated: state.updated, changed: Object.keys(state.revs).filter(k => state.revs[k] === state.round) };
+}
+
 // ── serve ───────────────────────────────────────────────────────────────
 function serve() {
   if (!fs.existsSync(F.plan)) {
@@ -174,11 +266,38 @@ function serve() {
     return answers[noteId];
   }
 
+  // Bookkeeping state, recomputed whenever plan.js has new content that runs.
+  let revState = readJson(F.revs, null);
+  let revSource = null;
+  function refreshRevisions() {
+    let src;
+    try {
+      src = fs.readFileSync(F.plan, "utf8");
+    } catch (e) {
+      return;
+    }
+    if (src === revSource) {
+      return;
+    }
+    const plan = evalPlan(src);
+    if (!plan) {
+      return;
+    }
+    revSource = src;
+    const next = trackRevisions(plan, revState);
+    if (next !== revState) {
+      revState = next;
+      writeJson(F.revs, revState);
+    }
+  }
+  refreshRevisions();
+
   // Poll mtimes: fs.watch misses edits on macOS when editors replace the file.
   let planMtime = fs.statSync(F.plan).mtimeMs;
   fs.watchFile(F.plan, { interval: 300 }, cur => {
     if (cur.mtimeMs && cur.mtimeMs !== planMtime) {
       planMtime = cur.mtimeMs;
+      refreshRevisions();
       broadcast("plan", { mtime: planMtime });
     }
   });
@@ -239,6 +358,18 @@ function serve() {
       res.end(req.method === "HEAD" ? undefined : buf);
     });
   }
+  // plan.js plus the bookkeeping the agent no longer writes by hand (read by the engine's applyAuto).
+  function servePlan(req, res) {
+    fs.readFile(F.plan, "utf8", (e, src) => {
+      if (e) {
+        return json(res, 404, { error: "not found" });
+      }
+      refreshRevisions();
+      const body = `${src}\n;window.PLAN_AUTO = ${JSON.stringify(autoInfo(revState))};\n`;
+      res.writeHead(200, { "content-type": TYPES[".js"], "cache-control": "no-store", ...SECURITY });
+      res.end(req.method === "HEAD" ? undefined : body);
+    });
+  }
   function serveStatic(req, res, url) {
     if (req.method !== "GET" && req.method !== "HEAD") {
       return json(res, 405, { error: "method not allowed" });
@@ -265,6 +396,9 @@ function serve() {
     const file = path.resolve(DIR, "." + rel);
     if (!file.startsWith(DIR + path.sep)) {
       return json(res, 404, { error: "not found" });
+    }
+    if (file === F.plan) {
+      return servePlan(req, res);
     }
     return serveFile(req, res, file);
   }
@@ -544,17 +678,41 @@ function listen(execCmd) {
       pump();
     });
   }
-  const handle = a => {
+  // Session mode: notes saved close together go out as one line, so the agent takes one turn for them.
+  const batch = new Map();
+  let batchTimer = null;
+  function flushBatch() {
+    clearTimeout(batchTimer);
+    batchTimer = null;
+    const list = [...batch.values()];
+    batch.clear();
+    if (list.length === 1) {
+      log(list[0]);
+    } else if (list.length > 1) {
+      // One replies command answers the whole batch, so per-note reply commands are left out.
+      log({ type: "notes", notes: list.map(({ type, reply, ...n }) => n), replies: `node ${shq(SELF)} replies ${shq(DIR)} -` });
+    }
+  }
+  const handle = (a, now) => {
     if (execCmd) {
       queue.push(a);
       pump();
-    } else {
-      log(a);
+      return;
+    }
+    batch.set(a.noteId, slimNote(a));
+    if (now) {
+      flushBatch();
+    } else if (!batchTimer) {
+      batchTimer = setTimeout(flushBatch, BATCH_MS);
     }
   };
 
   for (const a of pendingAsks()) {
-    handle({ ...a, pending: true });
+    handle({ ...a, pending: true }, false);
+  }
+  flushBatch();
+  if (!execCmd) {
+    watchChecks();
   }
   let offset = 0;
   try {
@@ -594,6 +752,72 @@ function listen(execCmd) {
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
+}
+
+// The note as the agent sees it: what it needs to act and reply, nothing it can derive or rarely uses.
+// The full ask stays in .live/asks.jsonl.
+function slimNote(a) {
+  const out = { type: "note", noteId: a.noteId };
+  if (a.mark) {
+    out.mark = a.mark;
+  }
+  out.text = a.text || "";
+  for (const k of ["where", "nid", "quote"]) {
+    if (a[k]) {
+      out[k] = a[k];
+    }
+  }
+  const target = String(a.target || "").replace(/\s+/g, " ").trim();
+  const quote = String(a.quote || "").replace(/\s+/g, " ").trim();
+  // Element notes quote the element's first 160 characters, so its text adds nothing; `nid` finds the rest.
+  // Text notes quote a selection, and the element text around it is context.
+  if (target && !(quote && target.startsWith(quote.replace(/…$/, "")))) {
+    out.target = target.length > TARGET_CHARS ? `${target.slice(0, TARGET_CHARS - 1)}…` : target;
+  }
+  if (a.pending) {
+    out.pending = true;
+  }
+  out.reply = a.reply;
+  return out;
+}
+
+// Session mode: lint plan.js after the agent's edits settle, and say so only when something is wrong
+// (and once more when it's fixed). Saves a check.mjs run per edit.
+const CHECK_SETTLE_MS = Number(process.env.PLAN_EXPLORER_CHECK_SETTLE_MS || 3000);
+function watchChecks() {
+  let seen = 0;
+  let changedAt = 0;
+  let lastReport = "";
+  setInterval(async () => {
+    let m = 0;
+    try {
+      m = fs.statSync(F.plan).mtimeMs;
+    } catch (e) {
+      return;
+    }
+    if (!seen) {
+      seen = m;
+      return;
+    }
+    if (m !== seen) {
+      seen = m;
+      changedAt = Date.now();
+      return;
+    }
+    if (!changedAt || Date.now() - changedAt < CHECK_SETTLE_MS) {
+      return;
+    }
+    changedAt = 0;
+    const { checkPlanFile } = await import("./check.mjs");
+    const r = checkPlanFile(F.plan);
+    const report = r.errors.join("\n");
+    if (report && report !== lastReport) {
+      log({ type: "check", ok: false, errors: r.errors.slice(0, 8), ...(r.errors.length > 8 ? { more: r.errors.length - 8 } : {}) });
+    } else if (!report && lastReport) {
+      log({ type: "check", ok: true });
+    }
+    lastReport = report;
+  }, 500);
 }
 
 // Exec adapter: one process per note, prompt on stdin, stdout streams back as the reply.
@@ -638,7 +862,7 @@ Note: ${a.text}
 Rules:
 - ? = answer it. ! = address the concern. + = fold the idea in or say why not. ✓ = lock it in. ✗ = cut it. No mark = context; reply only if useful.
 - Technical facts only. No preamble, no description of how you found the answer. Keep it short.
-- If a change is needed and you can edit files, edit ${F.plan}: keep every existing id, set rev to the plan's version on what you change, and say in one line what changed.
+- If a change is needed and you can edit files, edit ${F.plan}: keep every existing id and say in one line what changed. Version, dates and "Changed" tags are tracked for you.
 - Your stdout is shown to the user as the reply.
 `;
 }
@@ -679,11 +903,77 @@ async function reply() {
   console.log(`✓ ${status} → ${noteId}`);
 }
 
+// Several answers in one command. stdin is either {"<noteId>": "text", …} or blocks:
+//   --- <noteId>
+//   text (any lines; empty marks the note seen)
+function parseReplies(input) {
+  const src = input.trim();
+  if (src.startsWith("{")) {
+    const obj = JSON.parse(src);
+    return Object.entries(obj).map(([noteId, text]) => [noteId, String(text ?? "").trim()]);
+  }
+  const out = [];
+  let cur = null;
+  for (const line of input.split("\n")) {
+    const m = line.match(/^---\s+([A-Za-z0-9_-]{1,64})\s*$/);
+    if (m) {
+      cur = [m[1], []];
+      out.push(cur);
+    } else if (cur) {
+      cur[1].push(line);
+    }
+  }
+  return out.map(([noteId, lines]) => [noteId, lines.join("\n").trim()]);
+}
+async function replies() {
+  const status = flag("--status", "done") === "working" ? "working" : "done";
+  const src = rest[0] && rest[0] !== "-" ? rest.join(" ") : fs.readFileSync(0, "utf8");
+  let list;
+  try {
+    list = parseReplies(src);
+  } catch (e) {
+    console.error(`✗ ${e.message}`);
+    process.exit(2);
+  }
+  if (!list.length) {
+    console.error("✗ no replies found. Use blocks that start with a line \"--- <noteId>\", or a JSON object.");
+    process.exit(2);
+  }
+  let failed = 0;
+  for (const [noteId, text] of list) {
+    try {
+      await postAnswer(noteId, status, text, process.env.PLAN_AGENT || "agent");
+      console.log(`✓ ${status} → ${noteId}`);
+    } catch (e) {
+      failed++;
+      console.error(`✗ ${noteId}: ${e.message}`);
+    }
+  }
+  process.exit(failed ? 1 : 0);
+}
+
+// Optional changelog: one entry for the current round, kept in .live/changelog.json with the ids that changed.
+function logCmd() {
+  const what = rest.join(" ").trim();
+  if (!what) {
+    console.error(USAGE);
+    process.exit(2);
+  }
+  ensureLiveDir();
+  const state = readJson(F.revs, null);
+  const info = autoInfo(state) || { version: null, changed: [] };
+  const entries = readJson(F.changelog, []);
+  entries.push({ version: info.version, date: today(), what, changed: info.changed });
+  writeJson(F.changelog, entries);
+  console.log(`✓ logged v${info.version ?? "?"}: ${what}`);
+}
+
 async function status() {
   const s = readJson(F.server, null);
   const running = !!(await health(s));
   const l = listenerState();
-  console.log(JSON.stringify({ running, url: running ? s.url : null, open: running ? s.first : null, agent: l ? l.mode : "offline", pending: pendingAsks().map(a => ({ noteId: a.noteId, text: a.text, where: a.where })) }, null, 2));
+  const info = autoInfo(readJson(F.revs, null));
+  console.log(JSON.stringify({ running, url: running ? s.url : null, open: running ? s.first : null, agent: l ? l.mode : "offline", version: info ? info.version : null, changed: info ? info.changed : [], pending: pendingAsks().map(a => ({ noteId: a.noteId, text: a.text, where: a.where })) }, null, 2));
 }
 
 async function stopCmd() {
@@ -696,5 +986,5 @@ async function stopCmd() {
   }
 }
 
-const RUN = { open, serve, listen: () => listen(flag("--exec", null)), reply, status, stop: stopCmd };
+const RUN = { open, serve, listen: () => listen(flag("--exec", null)), reply, replies, log: logCmd, status, stop: stopCmd };
 await RUN[cmd]();

@@ -19,6 +19,8 @@ function saveNote(text) {
 async function phase1() {
   location.hash = "explore/local-store";
   await wait(2500);
+  // Without live bookkeeping (file://), rev === version still tags items.
+  ok("rev tags without PLAN_AUTO", window.PLAN_AUTO === undefined && [...document.querySelectorAll("#page .tag.new")].some(t => t.textContent === "Changed v2"));
   // ── notes on prose, svg, selection ──
   const p = q$('[data-nid="areas/local-store/summary/p0"]');
   altClick(p, 300, 200);

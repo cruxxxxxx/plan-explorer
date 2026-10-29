@@ -15,8 +15,8 @@ window.PLAN = {
   id: "offline-sync",             // required. Keys browser storage and names the export file
   kind: "plan",                   // "plan" (work items, no severity) | "review" (findings with severity)
   title: "Offline sync for Notes",// required
-  version: 3,                     // integer. Bump once per refinement round
-  updated: "2026-10-28",
+  version: 3,                     // optional while live: the server tracks versions (reference/live.md, Bookkeeping)
+  updated: "2026-10-28",          // optional while live: the server dates each change
 
   overview: {
     summary: "2–4 sentences. Markdown.",
@@ -28,7 +28,7 @@ window.PLAN = {
     id: "sync",                   // required
     title: "Sync protocol",       // required
     status: "draft",              // draft | exploring | settled
-    rev: 3,                       // optional: version this was last changed in
+    rev: 3,                       // optional, any item: version it last changed in. Live pages tag changes on their own
     summary: "1–2 sentences. Markdown.",
 
     flows: [{                     // sequence diagrams: the main content
@@ -134,7 +134,7 @@ window.PLAN = {
     "nmh3k2x9ab": { text: "Answer. Newlines OK, inline md.", version: 3 }
   },
 
-  changelog: [{ version: 3, date: "2026-10-28", what: "inline md summary of the round" }]
+  changelog: [{ version: 3, date: "2026-10-28", what: "inline md summary of the round" }]  // optional; live: `live.mjs log`
 };
 ```
 
@@ -170,7 +170,7 @@ Live pages keep `<dir>/.live/notes.json` current in this format. A page with no 
 ```json
 {
   "format": "plan-explorer-notes",
-  "engine": "2.4.1",
+  "engine": "2.5.0",
   "plan": "offline-sync",
   "title": "Offline sync for Notes",
   "planVersion": 2,
@@ -197,4 +197,4 @@ Live pages keep `<dir>/.live/notes.json` current in this format. A page with no 
 }
 ```
 
-Live: reply with the note's `reply` command (answers land in `.live/answers.json`). Offline only: add `replies[note.id]`. Never copy notes into plan.js.
+Live: reply with the note's `reply` command, or a batch's `replies` command (answers land in `.live/answers.json`). Offline only: add `replies[note.id]`. Never copy notes into plan.js.

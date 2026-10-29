@@ -38,9 +38,25 @@ sequenceDiagram
 - Declare every participant up front with `participant <id> as <Label>`. Ids are short, with no spaces and no hyphens. The id is what notes attach to (`…/actor/<id>`), so keep it stable.
 - Use `->>` for a call, `-->>` for a return, and `-x` for a failure.
 - Use `alt/else/end`, `opt/end`, `loop/end` and `par/and/end` for branching. Don't nest more than one level deep.
-- Avoid `;`, `#`, `{}` and raw `<`/`>` in message text. Write "and" or "then" instead of `;`. `<br>` is fine.
+- Avoid `;`, `#`, `{}` and raw `<`/`>` in message text (the lint flags them). Write "and" or "then" instead of `;`. `<br>` is fine.
 - Don't use `autonumber`. It adds noise, and notes already identify messages.
 - Only `sequenceDiagram` gets per-message note targets. Other Mermaid types render, but notes attach to the whole flow.
+
+## Checking: which tool when
+
+| tool | cost | catches | run it |
+|---|---|---|---|
+| `scripts/check.mjs <dir>/plan.js` | instant, no browser | plan structure, ids, links, and a static Mermaid lint of every `sequenceDiagram` | after every edit. While live, the listener runs it for you and prints a `check` line only on failure. |
+| `scripts/verify.sh <dir>` | headless Chrome, needs network | everything Mermaid itself rejects, in every diagram type | once after seeding, after structural diagram changes (new flows, participants or blocks), for flowcharts, and whenever the page shows "Diagram error". |
+
+The static lint was calibrated against the engine's pinned Mermaid. Errors (each with its line number):
+- `;` anywhere in message, note or label text (Mermaid ends the statement there);
+- a message without `: text`, and bad arrows (`->>>`, `=>>`, `--` without a head);
+- `alt`/`opt`/`loop`/`par`/`critical`/`break`/`rect`/`box` never closed, a stray `end`, `else` outside `alt`, `and` outside `par`;
+- once any participant is declared: an undeclared participant in a message, `Note` or `activate` (Mermaid would silently draw a ghost participant for a typo);
+- `end` as a participant id; a `Note` without `left of`/`right of`/`over`; any line Mermaid can't parse.
+
+Warnings: `#` (`#name;` is read as an entity code), braces, raw `<`/`>`, hyphens in participant ids, nesting deeper than one level, `autonumber`, no participant declarations, and more than 8 participants.
 
 ## Flowcharts
 

@@ -25,6 +25,9 @@ mkdir -p "$tmp/site" "$tmp/profile"
 cp "$S/examples/review/plan.js" "$S/tests/live-page-test.js" "$tmp/site/"
 sed 's|</body>|<pre id="results">pending</pre><script src="live-page-test.js"></script></body>|' "$S/engine/explorer.html" > "$tmp/engine.html"
 export PLAN_EXPLORER_ENGINE="$tmp/engine.html"
+# Lint plan.js half a second after an edit settles (default 3 s), so the check events below come quickly.
+export PLAN_EXPLORER_CHECK_SETTLE_MS=500
+js() { node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})' "$1"; }
 
 check "status before start" "$(node "$LIVE" status "$tmp/site" | grep -c '"running": false')" 1
 node "$LIVE" "$tmp/site" --port 0 > "$tmp/listen.log" 2>&1 &
@@ -76,6 +79,11 @@ ask="$(grep '"type":"note"' "$tmp/listen.log" | head -1)"
 note=$(printf '%s' "$ask" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).noteId))')
 check "saving a note sends it to the agent" "$(printf '%s' "$ask" | grep -c 'why a materialized view')" 1
 check "note carries element text" "$(printf '%s' "$ask" | grep -c 'local SQLite op log')" 1
+check "slim note: no planFile, markName, at, plan" "$(printf '%s' "$ask" | js '["planFile","markName","at","plan","planVersion","kind"].filter(k => k in j).join(",")')" ""
+check "slim note: keeps noteId, mark, text, where, nid, quote, reply" "$(printf '%s' "$ask" | js '["noteId","mark","text","where","nid","quote","reply"].every(k => k in j)')" true
+check "slim note: element text not repeated when the quote has it" "$(printf '%s' "$ask" | js '"target" in j')" false
+check "slim note under 600 bytes" "$(printf '%s' "$ask" | js 'Buffer.byteLength(JSON.stringify(j)) < 600')" true
+check "served plan.js carries PLAN_AUTO baseline" "$(curl -s -H "Cookie: $cookie" "$base/plan.js" | grep -c 'window.PLAN_AUTO = {"version":2,"updated":null,"changed":\[\]}')" 1
 check "status: agent listening" "$(node "$LIVE" status "$tmp/site" | grep -c '"agent": "listening"')" 1
 sleep 1
 node "$LIVE" reply "$tmp/site" "$note" --status working "Checking the view code" > /dev/null
@@ -92,6 +100,40 @@ echo "$results"
 check "notes synced to .live/notes.json" "$(grep -c 'why a materialized view' "$tmp/site/.live/notes.json" 2>/dev/null)" 1
 echo "$results" | grep -q '^PASS' || { echo "FAIL page produced no results"; fails=$((fails + 1)); }
 echo "$results" | grep -q '^FAIL' && fails=$((fails + 1))
+
+# ── bookkeeping: the server diffs plan.js and tags what changed; the agent sets no rev ──
+auto() { curl -s -H "Cookie: $cookie" "$base/plan.js" | sed -n 's/^;window.PLAN_AUTO = \(.*\);$/\1/p'; }
+check "edit tags the changed item and bumps the version" "$(auto | js 'j.version + " " + j.changed.join(",")')" "3 areas/local-store"
+check "updated date set by the server" "$(auto | js '/^\d{4}-\d\d-\d\d$/.test(j.updated)')" true
+check "revs snapshot kept in .live" "$(test -f "$tmp/site/.live/revs.json" && echo yes)" yes
+node -e 'const f=process.argv[1];const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("Do we batch pushes, or stream ops one by one?","Do we batch pushes?"))' "$tmp/site/plan.js"
+check "second edit in the same round adds to the tags, no new version" "$(auto | js 'j.version + " " + j.changed.sort().join(",")')" "3 areas/local-store,areas/sync/questions/batching"
+node "$LIVE" log "$tmp/site" "Shortened the batching question" > /dev/null
+check "log appends one changelog entry with the changed ids" "$(js 'j.length + " " + j[0].version + " " + j[0].changed.length' < "$tmp/site/.live/changelog.json")" "1 3 2"
+
+# ── batching: notes saved together reach the agent as one line ──
+ask() { curl -s -X POST -H "x-live-token: $token" -H 'content-type: application/json' "$base/live/ask" -d "$1" > /dev/null; }
+ask '{"note":{"id":"b1","mark":"?","text":"first","where":"Overview","nid":"overview/title","quote":"Offline sync"},"target":"Offline sync: review"}'
+ask '{"note":{"id":"b2","mark":"!","text":"second","where":"Overview","nid":"overview/summary/p0","kind":"text","quote":"op log"},"target":"Every edit lands in a local SQLite op log first. The UI reads from a materialized view that is rebuilt from the log on launch, so a crash between append and apply loses nothing; the log is the only source of truth and the view is a cache. This sentence pads the element past two hundred characters."}'
+for _ in $(seq 60); do grep -q '"type":"notes"' "$tmp/listen.log" 2>/dev/null && break; sleep 0.1; done
+batch="$(grep '"type":"notes"' "$tmp/listen.log" | tail -1)"
+check "two notes within 2 s arrive as one line" "$(printf '%s' "$batch" | js 'j.notes.map(n => n.noteId).join(",")')" "b1,b2"
+check "no separate note lines for a batch" "$(grep -c '"noteId":"b1"' "$tmp/listen.log")" 1
+check "batch carries one replies command" "$(printf '%s' "$batch" | js 'j.replies.includes(" replies ")')" true
+check "batched notes carry no per-note reply" "$(printf '%s' "$batch" | js 'j.notes.some(n => "reply" in n)')" false
+check "text-note context truncated to 200 chars" "$(printf '%s' "$batch" | js 'j.notes[1].target.length')" 200
+printf -- '--- b1\nAnswer one.\n\n--- b2\nAnswer two,\nover two lines.\n' | sh -c "$(printf '%s' "$batch" | js 'j.replies')" > /dev/null
+check "replies answers every note in one command" "$(js '[j.b1.text, j.b2.text, j.b2.status].join("|")' < "$tmp/site/.live/answers.json")" "Answer one.|Answer two,
+over two lines.|done"
+
+# ── lint while live: a broken diagram is reported once, and its fix once ──
+cp "$tmp/site/plan.js" "$tmp/plan.good"
+sed 's/U->>UI: types a sentence/U->>UI: types a sentence; saves/' "$tmp/plan.good" > "$tmp/plan.bad" && cat "$tmp/plan.bad" > "$tmp/site/plan.js"
+for _ in $(seq 60); do grep -q '"type":"check"' "$tmp/listen.log" 2>/dev/null && break; sleep 0.1; done
+check "broken diagram reported on the stream" "$(grep '"type":"check"' "$tmp/listen.log" | head -1 | js 'j.ok + " " + /";"/.test(j.errors[0])')" "false true"
+cat "$tmp/plan.good" > "$tmp/site/plan.js"
+for _ in $(seq 60); do grep -q '"type":"check","ok":true' "$tmp/listen.log" 2>/dev/null && break; sleep 0.1; done
+check "fix reported once" "$(grep -c '"type":"check"' "$tmp/listen.log")" 2
 
 # ── restart keeps the URL and token ──
 node "$LIVE" stop "$tmp/site" > /dev/null
@@ -115,5 +157,30 @@ curl -s -X POST -H "x-live-token: $etoken" -H 'content-type: application/json' "
 for _ in $(seq 60); do grep -q '"done"' "$tmp/ex/.live/answers.json" 2>/dev/null && break; sleep 0.1; done
 check "exec agent answers" "$(grep -c 'ECHO Note: why sqlite' "$tmp/ex/.live/answers.json" 2>/dev/null)" 1
 check "status: agent exec" "$(node "$LIVE" status "$tmp/ex" | grep -c '"agent": "exec"')" 1
+
+# ── rounds: edits after a quiet gap get a new version and a fresh set of Changed tags ──
+mkdir -p "$tmp/bk"
+cp "$S/examples/plan/plan.js" "$tmp/bk/"
+PLAN_EXPLORER_ROUND_GAP_MS=1000 node "$LIVE" serve "$tmp/bk" --port 0 > "$tmp/bk.log" 2>&1 &
+pids+=($!)
+for _ in $(seq 80); do grep -q '"ready"' "$tmp/bk.log" 2>/dev/null && break; sleep 0.1; done
+bport=$(field "$tmp/bk/.live/server.json" port)
+btoken=$(field "$tmp/bk/.live/server.json" token)
+bauto() { curl -s -H "x-live-token: $btoken" "http://127.0.0.1:$bport/plan.js" | sed -n 's/^;window.PLAN_AUTO = \(.*\);$/\1/p'; }
+bedit() { node -e 'const [f,a,b]=process.argv.slice(1);const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(a,b))' "$tmp/bk/plan.js" "$1" "$2"; }
+check "baseline: nothing tagged, version from plan.js" "$(bauto | js 'j.version + ":" + j.changed.length')" "1:0"
+bedit 'Compact the op log on sync ack, or on a timer?' 'Compact the op log on sync ack?'
+check "round 2: new question tagged" "$(bauto | js 'j.version + ":" + j.changed.join()')" "2:areas/local-store/questions/compaction"
+bedit '"Ops not yet acked, oldest first."' '"Ops not yet acked, oldest first, at most 500."'
+bedit '{ id: "m2", stage: "Sync"' '{ id: "m3", stage: "Conflicts", items: ["Three-way merge"] },
+    { id: "m2", stage: "Sync"'
+check "same round: member and new roadmap stage added" "$(bauto | js 'j.version + ":" + j.changed.sort().join()')" "2:api/op-log/m/unsynced,areas/local-store/questions/compaction,roadmap/m3"
+bedit 'version: 1,' 'version: 1, rev: 9,'
+check "bookkeeping-only edits change nothing" "$(bauto | js 'j.version + ":" + j.changed.length')" "2:3"
+sleep 1.2
+bedit '"Simple to inspect"' '"Simple to inspect with cat"'
+check "after a quiet gap: round 3 tags only the new change" "$(bauto | js 'j.version + ":" + j.changed.join()')" "3:areas/local-store/options/files"
+bedit 'version: 1,' 'version: 7,'
+check "a higher plan.version set by hand wins" "$(bauto | js 'j.version')" 7
 
 [ "$fails" = 0 ]

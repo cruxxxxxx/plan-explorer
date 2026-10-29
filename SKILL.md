@@ -5,193 +5,71 @@ description: Builds a live, interactive local "map" of a plan or code review. It
 
 # Plan Explorer
 
-**Focus:** a map of a plan or a code review that the agent writes from the code. It shows what happens (flows), where it goes wrong (issues pinned to diagram steps), and what code is involved (API types, by file). The human explores it, marks it up, and the agent refines it over rounds. This is not a generic document annotator.
+A plan is a folder holding one file, `plan.js` (`window.PLAN = { … }`), that you write from the code: flows (sequence diagrams), work or findings pinned to diagram steps, and API types by file. `node <skill>/scripts/live.mjs <dir>` serves it with the skill's engine, streams the user's notes to you, and hot-reloads the page when you edit `plan.js`.
 
-**Usage is one command; the effort goes into the data.** A plan is a folder that holds a single file, `plan.js` (`window.PLAN = { … }`). One command serves it with the skill's engine and keeps it live:
+**Read on demand** (paths relative to this file):
+- `reference/content.md`: before seeding or restructuring. `kind` (plan vs review), issue and work fields, API docs, the writing rules with examples.
+- `reference/diagrams.md`: before writing or reshaping flows.
+- `reference/schema.md`: when unsure of a field's shape or a note's `nid`.
+- `reference/live.md`: for live-loop details, `--exec` (other agent CLIs), a `*-notes-*.json` file (offline fallback), or anything misbehaving.
+- `examples/plan/plan.js` (work) and `examples/review/plan.js` (issues): complete small plans to copy the shape from.
 
-```
-node <skill>/scripts/live.mjs <dir>
-```
+## Rules
 
-That command (re-)starts a background server for `<dir>`, prints the page URL, and then streams the user's notes as JSON lines. Every page is live:
-- Saving a note sends it to you.
-- Your reply appears under the note.
-- Any edit to `plan.js` reloads the open page in place.
-- Engine updates reach every page, because no project keeps a copy.
-
-**Pages.** **Explore** is the home page: every area's flows with their issues under them, plus questions, options and sections, filtered by search, area tags, kind, severity, category, status and origin. **API** has a folder tree and type pages, with a foldable dependency graph. **Roadmap** and **Notes** are the other two. Diagrams are interactive: hovering a step shows a tooltip with its issues, a severity dot marks steps that have issues, clicking a step opens the issue in a side drawer, and clicking a participant opens its API type. Pinch or ⌘-scroll to zoom, drag to pan.
-
-Skill files, relative to this SKILL.md:
-- `reference/schema.md`: the full `plan.js` shape and the note format. **Read it before writing plan.js.**
-- `reference/diagrams.md`: rules for good high-level sequence diagrams. **Read it before writing flows.**
-- `examples/plan/plan.js` (an implementation plan with `work`) and `examples/review/plan.js` (a review with `issues`): complete small examples.
-- `scripts/live.mjs`: the server and the note stream. Protocol: `reference/live.md`.
-- `scripts/verify.sh <dir>`: validates plan.js, then renders every flow in headless Chrome and reports Mermaid errors.
-- `engine/explorer.html`: the renderer. It's served from here; never copy or edit it per project.
-- `tests/run-engine-test.sh` and `tests/live-test.sh`: self-tests. Run them only after changing the engine or the server.
-
-## Hard rules
-
-- Local files only. Never publish to claude.ai Artifacts.
-- Write only `plan.js`. Engine changes are a separate, explicit request. Make them in `engine/explorer.html`, bump `ENGINE_VERSION` and run both tests. Running servers pick the change up on their own.
-- **Ids are permanent.** Notes attach to ids (`areas/<area>/sections/<id>/p0` …). Never rename or reuse an id. To restructure, add new ids and delete the old ones. Notes on deleted ids become "orphaned" and keep their quote, so nothing is lost, but renaming for tidiness breaks the user's notes.
-- Stay high level. Actors in diagrams are systems, modules or people, not methods. Go down to classes and functions only when the user asks.
-- Don't open the page or drive the browser. Give the user the URL.
-
-## Writing: technical facts only
-
-Everything in `plan.js` (summaries, sections, captions, options, answers, replies, the changelog) states technical facts about the system and the plan. Nothing else.
-
-- **No process narration.** Never describe how a fact was found: no reviewers, agents, "antagonist", verification passes, "compared line by line", "I checked" or "we found".
-- **No verdicts or framing lead-ins** such as "X is a faithful move:", "Good news:", "In short," or "Overall,". Start with the fact itself.
-- **No hedging, filler or recap.** No "it's worth noting" or "as mentioned above".
-- One fact per sentence. Name the concrete thing: the component, field, condition and consequence.
-
-Bad:
-> The koreo split is a faithful move: the antagonist compared it line by line, and the delay invariant holds. Calibration has two old bugs, and the deleted post-seek guards leave one gap: the clock bridge keeps running while paused.
-
-Good:
-> The koreo split preserves the delay invariant.
-> - Calibration: two pre-existing bugs (list them).
-> - Removing the post-seek guards leaves the clock bridge running while paused.
-
-This applies to replies too. Answer the question directly. Don't say what you looked at to get the answer.
-
-## Context decides the shape: `kind`
-
-Set `PLAN.kind` first, because it decides how everything pinned to a flow reads:
-
-| `kind` | what it is | pinned items | how they read |
-|---|---|---|---|
-| `"review"` | code review, audit, bug hunt: something that exists and may be wrong | `areas[].issues` (findings) | severity high/medium/low, origin, open → fixed |
-| `"plan"` | implementation plan, design, feature build: something to be made | `areas[].work` | type `new` · `change` · `remove` · `risk` · `decision`, status `todo` → `doing` → `done`, or `dropped` (kept for the record, hidden by default). Neutral colours, no severity. |
-
-- Never put severity on planned work. A plan full of red and amber dots reads like a bug report, which is a false alarm.
-- Things that might go wrong in a plan are `work` items with `type: "risk"`, using `impact` and `mitigation`.
-- A current problem that the plan fixes is work too. Title it as the change (`Save an unlock the moment it is earned`), and put the current behaviour and cause in `why`. Use `issues` in a plan only for a bug that's out of the plan's scope and still worth flagging.
-- Fields for `work`: `title`, `type`, `status`, `flow`, `steps`, `types`, `where` (files to touch), `summary`, `why` (current behaviour, or the cause when the work fixes something), `how`, `impact`, `mitigation` (for risks), `verify` (done when), `related`, `rev`. Work is ordered by where it happens in its flow.
-- Let the kind shape the rest too. A plan leans on `options`, `openQuestions` and `roadmap`. A review leans on `issues` and API types `state: "changed"`.
-
-## Issues (reviews, audits, bugs)
-
-Findings go in `areas[].issues`, never in `sections`. The engine sorts them by severity, colours them softly (high / medium / low), and shows them on Explore under their flow. The severity pills on each area work as filter tabs. Clicking an issue opens its full context in the drawer, and every field can take notes.
-
-**Labels**
-- `id`: a descriptive kebab slug (`pause-skews-bridge`). Never a tracker code like `KOREO-1`, `ANT-6` or `X-2`. Reviewer or agent prefixes are process; they never appear in ids, titles or text.
-- `title`: the problem in plain words (`Post-seek bridge keeps running while paused`). No code prefix, no severity, no branch.
-- `category`: the subsystem that is **affected**, from the user's point of view (`Calibration`, `Song clock`, `Scoring`, `Scene flow`). Don't use the file or library the bug happens to live in. A Koreographer-callback bug that skews calibration is `Calibration`.
-- `severity`: `high | medium | low`. Exactly one. Never a range like "medium-low".
-- `origin`: `pre-existing` (also on the base branch) or `introduced` (new in this change). Use this field rather than writing "(present on cleanup-audit)" into the title.
-
-**Context.** Each issue must stand alone, so someone who fixes it never needs the review transcript:
-- `where`: every `path:line` involved.
-- `summary`: one sentence giving the user-visible symptom.
-- `trigger`: the exact conditions that reproduce it.
-- `cause`: the mechanism, naming the fields, methods and values involved.
-- `impact`: what goes wrong, how badly, and for whom.
-- `fix`: concrete steps, naming the methods to change.
-- `verify`: the test or manual check that proves the fix.
-- `related`: ids of other issues, open questions or API types (rendered as links). Merged duplicates are listed here, not in the title.
-- `status`: `open | fixing | fixed | wontfix`.
-
-**Link every issue** so it appears on the diagrams instead of in a separate list:
-- `flow`: the id of the flow in the same area where it happens. The issue is then listed under that flow.
-- `steps`: 1-based message numbers in that flow: every message line (`->>`, `-->>`, `->`, `-x`, `-)`, self-messages like `D->>D:`) counts as one step, top to bottom; `participant`, `note` and `%%` lines don't; a `<br>` inside a message is still one step. Each step gets a dot.
-- `types`: API type ids it touches. Types whose `source` file appears in `where` are linked automatically.
-Only fixed or wontfix issues, or issues with no fitting flow, may go without a flow. If an issue has no flow to sit on, consider adding the flow.
-
-Low-value nits can share one `sections` entry ("Small cleanups") as a bullet list. Anything with a fix someone would schedule is an issue.
-
-## API docs
-
-`PLAN.api` holds the types the plan touches, so the page doubles as API docs. The API page has a left-hand tree built from each type's `source` directory and file, with a filter box. The right pane shows either the dependency graph (grouped by top-level folder, and folded by default above 18 types) or one type: its path, summary, **Depends on** / **Used by**, the members table (**Signatures** or **Full**), the issues in its file, the flows it appears in, and a neighbourhood graph. `source` drives the tree, so set it on every type, including new ones (the planned path).
-
-**Retrieve or create**
-
-1. **Existing code** (`state: "existing"`): get these from the source. Copy public signatures verbatim. Take `doc` from existing doc comments (XML doc, JSDoc, docstrings, OpenAPI) where they exist; otherwise write one factual line. Set `source: "path/File.ext:line"`.
-2. **Planned changes:** `state: "new"` for types or members the plan adds, `"proposed"` for ones still under discussion, `"changed"` for existing ones with edits, `"removed"` for ones the plan deletes. Proposed signatures use the codebase's real conventions and types.
-3. Include only types the plan touches, plus their direct dependencies. That's usually 5–40. For a big extraction, fan out Explore subagents, one per area, each returning type, signature and doc tuples.
-4. Fill in detail in layers. Always give `summary` and every member's `sig` and `doc`. Add `body`, `detail`, `params`, `returns` and `throws` where they add information. Full detail is for decisions, not boilerplate.
-5. `dependsOn` lists type ids (drawn as edges) or free names (drawn as rounded "outside" nodes).
-6. **Couple it to the flows.** For each flow, set `actors: { <participant id>: <type id> }` for every participant that is a type. A participant whose label matches a type name is linked automatically.
-
-The same rules apply: ids are permanent, and docs state technical facts only.
-
-## Say it once
-
-Every fact lives in one place. The page reaches it from elsewhere through links, tooltips and the drawer.
-- Couple content by context, not by resource type. An issue belongs under the flow where it happens, and a type is reached from the participant that uses it. Don't add an "Issues" section or a list of types per area.
-- Don't repeat an issue's summary in a section or caption. Link to it with `related` or `flow`/`steps`.
-- Captions say what to notice in the diagram, not what the issues say.
+- Local files only; never Artifacts. Don't open the page or drive a browser; give the user the URL.
+- Write only `<dir>/plan.js`. Engine or server changes are a separate, explicit request (then run `tests/run-engine-test.sh` and `tests/live-test.sh`).
+- **Ids are permanent.** Notes attach to them. Never rename or reuse one; to restructure, add new ids and delete old ones.
+- Stay high level: diagram participants are systems, modules or people, not methods, unless the user asks.
+- **Technical facts only**, in `plan.js` and in replies: no process narration ("I checked", reviewers, how it was found), no verdict lead-ins or hedging. One fact per sentence, naming the component, condition and consequence.
 
 ## 1 · Seed
 
-1. Gather context: the user's idea, docs and the relevant code, skimmed at the level of architecture.
-2. Pick the folder: `<project>/Docs/<slug>-plan/` by default, or wherever the user says. `slug` is also `PLAN.id`, so keep it unique per plan.
-3. Write `<dir>/plan.js` with `version: 1`:
-   - an overview: a 2–4 sentence summary, goals and non-goals;
-   - **3–6 areas**, each with a 1–2 sentence summary;
-   - **1–3 sequence flows per area.** Aim for many small flows, not a few big ones. This is the heart of the page. Set `actors` on each one;
-   - `sections` only where prose is truly needed. Keep them short;
-   - `options` wherever there's a real choice. Include pros and cons, and set `pick` only once it's decided;
-   - `openQuestions`: your own questions for the user. Be generous, because this is how exploration starts;
-   - `api`: the types the plan touches (see "API docs"), when the plan involves code;
-   - `kind` (see "Context decides the shape"). Reviews get `issues`, and plans get `work`. Either way, set `flow`, `steps` and `types` on each one;
-   - a rough `roadmap`, if it helps;
-   - `changelog: [{ version: 1, date, what: "First draft" }]`, plus `replies: {}`.
-4. Run `<skill>/scripts/verify.sh <dir>`. It needs network for the Mermaid CDN; if the sandbox blocks Chrome's network, rerun it with the sandbox disabled. Fix every ✗. Treat "not linked to a flow" warnings as work to do.
-5. Go live (§2), and give the user the `open` URL from the `ready` line. The first visit sets a cookie, so after that the plain `url` works and can be bookmarked. Then list in one or two lines what's in the plan.
+1. Skim the user's idea, docs and code at architecture level. Read `reference/content.md` and `reference/diagrams.md`.
+2. Folder: `<project>/Docs/<slug>-plan/` unless the user says otherwise. `slug` is `PLAN.id`.
+3. Write `plan.js`: `kind`, an overview, 3–6 areas with 1–3 small flows each (with `actors`), work or issues pinned by `flow`/`steps`/`types`, options, generous open questions, `api` types when code is involved. No `version`, `rev` or `changelog` needed.
+4. `node <skill>/scripts/check.mjs <dir>/plan.js`. Fix every ✗; treat "not linked to a flow" as work. Then run `<skill>/scripts/verify.sh <dir>` once (headless Chrome; needs network, so disable the sandbox if Chrome can't reach the CDN).
+5. Go live (§2). Give the user the `open` URL from the `ready` line (later visits can use `url`), and say in one or two lines what the plan holds.
 
-## 2 · Live: notes arrive while the user reads
+## 2 · Live
 
-Run the command with the Monitor tool, `timeout_ms` at the maximum, and the description "plan notes":
+Run with the Monitor tool, `timeout_ms` at the maximum, description "plan notes": `node <skill>/scripts/live.mjs <dir>`. When it expires, run it again; the server keeps running.
+
+Lines it prints:
+- `{"type":"ready",url,open}`.
+- `{"type":"note",noteId,mark,text,where,nid,quote,target?,pending?,reply}`: one note. `pending` notes were saved while nothing listened.
+- `{"type":"notes",notes:[…],replies}`: notes saved within 2 s of each other (no per-note `reply`). Handle them all in one turn.
+- `{"type":"check",ok:false,errors}`: your last edit broke `plan.js` or a diagram. Fix it; `ok:true` follows.
+
+Act on each note's mark:
+
+| mark | meaning | what you do |
+|---|---|---|
+| `?` | question | Answer it. If the answer changes the plan, change the plan too. |
+| `!` | concern | Address it in the content (flow, item, section or option) and say what changed, or say why not. |
+| `+` | idea | Fold it in (option, flow step, section) or say why not. |
+| `✓` | agree | Lock it in: `pick: true`, area `status: "settled"`, or answer the open question. |
+| `✗` | cut | Remove or shrink the target, and say what went. |
+| none | plain note | Context. Reply optional. |
+
+**Reply** with the note's `reply` command, text on stdin (`<reply> <<'EOF' … EOF`). For a batch, use its one `replies` command:
 
 ```
-node <skill>/scripts/live.mjs <dir>
+<replies> <<'EOF'
+--- <noteId>
+answer
+--- <noteId>
+answer
+EOF
 ```
 
-- The first line is `{"type":"ready","url","open"}`. Every line after it is a note: `{"type":"note", noteId, mark, text, where, nid, quote, target, reply, …}`. Notes saved while nothing was listening come first, with `"pending": true`.
-- When the monitor expires, run the same command again. The server keeps running, and the page shows "no agent listening" in the gap.
-- If the session is busy, notes wait. The page shows them as queued.
+An empty answer marks a plain note "seen". For slow work, send the same command with `--status working` first. Keep replies short and factual, then say in one terminal line what you did.
 
-For each note:
-1. Act on its mark:
+**Bookkeeping is automatic.** The server diffs each `plan.js` save against its snapshot and tags changed or added items "Changed". After a 30-minute quiet gap the next edit starts a new version, and the server dates it. Don't maintain `version`, `updated`, `rev` or `changelog`. Optionally, `live.mjs log <dir> "what changed"` records one changelog entry.
 
-   | mark | meaning | what you do |
-   |---|---|---|
-   | `?` | question | Answer it. If the answer changes the plan, change the plan too. |
-   | `!` | concern or risk | Address it in the content (a flow, issue, section or option), and say what changed. If you disagree, say why. |
-   | `+` | idea | Fold it in, as an option, flow step or section, or say why not. |
-   | `✓` | agree | Lock it in: set `pick: true` on options, `status: "settled"` on areas, or answer the open question. |
-   | `✗` | cut | Remove or shrink the target, and say what went. |
-   | none | plain note | Treat it as context. A reply is optional. |
+**Checks.** While live, the listener lints every edit (structure plus a static Mermaid lint) and reports only failures. Run `verify.sh` only after structural diagram changes (new flows, participants or blocks) or when the page shows "Diagram error".
 
-2. Reply with the note's `reply` command, passing the text on stdin (`<reply> <<'EOF' … EOF`).
-   - A plain note that needs no answer still gets an empty reply (`echo "" | <reply>`). That marks it "seen".
-   - For slow work, send `--status working` first.
-   - Keep replies short and factual (see "Writing: technical facts only").
-3. Briefly say in the terminal what you did, so the user can follow along there too.
+`<dir>/.live/notes.json` holds every note with its `anchorState` (`ok`, `moved`, `changed`, `orphaned`). `live.mjs status <dir>` shows the server, version, changed ids and pending notes; `stop <dir>` shuts it down. To skip the approval prompt per reply, the user can allow `Bash(node <skill>/scripts/live.mjs:*)`.
 
-**Versioning while live.** Bump `version` and `updated` once, on the first edit of a session. Set `rev` to that version on everything you add or change, because the page tags those as **Changed**. Run `verify.sh` after structural edits (new flows or diagram changes). Append one changelog entry per session.
+## 3 · Direct edits and offline
 
-`<dir>/.live/notes.json` always holds every note in export format: mark, text, `nid`, `quote`, `anchorState` and reply. Read it to review everything at once. `anchorState` is one of:
-- `ok`: still on its target;
-- `moved`: the quote was found elsewhere;
-- `changed`: the element was rewritten;
-- `orphaned`: the target is gone.
-
-Use `quote` and `where` to see what the user pointed at.
-
-`node <skill>/scripts/live.mjs status <dir>` shows the server, the agent and pending notes. `stop <dir>` shuts the server down.
-
-To skip the approval prompt on every reply, the user can allow `Bash(node <skill>/scripts/live.mjs:*)`.
-
-Agents without a live session use `--exec "<agent CLI>"`, which runs one process per note (see `reference/live.md`).
-
-## 3 · Direct edits
-
-If the user asks in chat for something like "add a flow for X" or "split area Y", edit `plan.js`, set `rev`, add a changelog line and run verify. Open pages reload on their own.
-
-## 4 · Offline fallback
-
-Only when no server is running (a page opened straight from a file, or a notes JSON the user hands you). Its notes are exported from the Notes page as `<plan-id>-notes-<date>.json`, usually into `~/Downloads`. Work through the notes whose `status` is `open` with the §2 table. Answer in `PLAN.replies[noteId] = { text, version }` (live answers in `.live/answers.json` take precedence, so never use `replies` while live), bump `version`, set `rev`, and add a changelog entry. To get the user back online, run §2 and give them the URL.
+For a chat request such as "add a flow for X", edit `plan.js`. While live, the check runs on its own; otherwise run `check.mjs`. For a `*-notes-*.json` file or a page opened from a file, follow "Offline fallback" in `reference/live.md`.

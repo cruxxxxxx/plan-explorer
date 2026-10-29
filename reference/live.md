@@ -12,35 +12,86 @@ page ◀────SSE───── server ◀──── watches plan.js �
 
 | command | what it does |
 |---|---|
-| `node live.mjs <dir> [--exec "<cmd>"]` | **The one command.** It starts the server in the background, or reuses it (and restarts it if `live.mjs` or the engine changed). It prints `{"type":"ready","url","open"}`, then one JSON line per note: still-pending notes first (`"pending": true`), then new ones as they're saved. With `--exec`, it runs `<cmd>` per note instead of printing. Re-running it is safe: a newer listener takes over. |
+| `node live.mjs <dir> [--exec "<cmd>"]` | **The one command.** It starts the server in the background, or reuses it (and restarts it if `live.mjs` or the engine changed). It prints `{"type":"ready","url","open"}`, then the note stream (below): still-pending notes first (`"pending": true`), then new ones as they're saved. With `--exec`, it runs `<cmd>` per note instead of printing. Re-running it is safe: a newer listener takes over. When the Monitor expires, the page shows "no agent listening" until the command runs again. |
 | `node live.mjs reply <dir> <noteId> [--status working\|done] [text \| -]` | Answers a note. `-` reads the text from stdin. An empty `done` reply marks the note "seen". |
-| `node live.mjs status <dir>` | Shows whether the server is running, its URL, the agent's state (`listening`, `exec` or `offline`) and the pending notes. |
+| `node live.mjs replies <dir> [--status working] -` | Answers several notes in one command (`done` unless `--status working`). stdin is blocks that each start with a line `--- <noteId>` followed by the answer (any lines), or a JSON object `{"<noteId>": "answer"}`. Every batch line carries this command ready to run. |
+| `node live.mjs log <dir> "what changed"` | Optional. Appends one entry `{version, date, what, changed: [ids]}` for the current round to `.live/changelog.json`. |
+| `node live.mjs status <dir>` | Shows whether the server is running, its URL, the agent's state (`listening`, `exec` or `offline`), the current version, the ids changed in it, and the pending notes. |
 | `node live.mjs stop <dir>` | Stops the server (asks it to exit, then waits until the port is free). |
 | `node live.mjs serve <dir> [--port N]` | The server itself, in the foreground. `<dir>` starts this for you. |
 
 **URL.** The port is derived from the folder path, in the range 47100–47899, so it stays stable across restarts. The first visit uses `open` (`url?t=<token>`). The server answers with an HttpOnly, SameSite=Strict cookie, and from then on the plain `url` works in that browser. The token persists in `.live/server.json`, so bookmarks survive restarts.
 
-## Note event (one line of output)
+## Note stream (stdout, one JSON object per line)
+
+**One note:**
 
 ```json
-{
-  "type": "note", "at": 1793281200000,
-  "noteId": "nmh3k2x9ab", "mark": "?", "markName": "Question",
-  "text": "why a materialized view",
-  "where": "Local store › Summary › ¶1", "nid": "areas/local-store/summary/p0",
-  "kind": "element", "quote": "Every edit lands in…",
-  "target": "full text of the element the note is on",
-  "plan": "offline-sync", "planVersion": 2,
-  "planFile": "/abs/path/plan.js",
-  "reply": "node '/abs/live.mjs' reply '/abs/dir' 'nmh3k2x9ab' -"
-}
+{"type":"note","noteId":"nmh3k2x9ab","mark":"?","text":"why a materialized view",
+ "where":"Local store › Summary › ¶1","nid":"areas/local-store/summary/p0","quote":"Every edit lands in a local SQLite op log first. …",
+ "reply":"node '/abs/live.mjs' reply '/abs/dir' 'nmh3k2x9ab' -"}
 ```
 
-`reply` is the exact command that answers the note, single-quoted for POSIX shells, so an agent needs no other instructions to close the loop. Note ids are `[A-Za-z0-9_-]{1,64}`. Editing a note sends it again under the same `noteId`, and the newest version wins.
+- Empty fields are left out (`mark` on a plain note, `quote`, …).
+- `quote` is the selected phrase (a text note), or the first 160 characters of the element (an element note).
+- `target` is the element's text, cut to 200 characters. It's sent only for text notes, where it adds context around the selection; for element notes the quote already is its start, and `nid` locates the rest in `plan.js`.
+- `pending: true` marks a note saved while no agent was listening.
+- `reply` is the exact command that answers the note, single-quoted for POSIX shells, so an agent needs no other instructions to close the loop.
+
+The full ask (with `at`, `markName`, `kind`, the whole `target`, `plan`, `planVersion`, `planFile`) stays in `.live/asks.jsonl`. Note ids are `[A-Za-z0-9_-]{1,64}`. Editing a note sends it again under the same `noteId`, and the newest version wins.
+
+**Several notes (batching).** The listener holds a note for 2 s (`PLAN_EXPLORER_BATCH_MS`). Every note saved in that window goes out on the same line, newest version per note id, so the agent takes one turn for the lot instead of one per note. A lone note still goes out as `type: "note"`, and pending notes at startup go out at once.
+
+```json
+{"type":"notes","notes":[{"noteId":"b1","mark":"?","text":"…","where":"…","nid":"…","quote":"…"},{"noteId":"b2","…":"…"}],
+ "replies":"node '/abs/live.mjs' replies '/abs/dir' -"}
+```
+
+Notes in a batch carry no `reply` of their own; the one `replies` command answers any subset of them.
+
+Answer a batch with its `replies` command:
+
+```
+node '/abs/live.mjs' replies '/abs/dir' - <<'EOF'
+--- b1
+Answer one.
+--- b2
+Answer two.
+EOF
+```
+
+**Lint results.** In session mode the listener also lints `plan.js` (`check.mjs`: structure plus the static Mermaid lint) 3 s after each edit settles (`PLAN_EXPLORER_CHECK_SETTLE_MS`). It prints only failures, `{"type":"check","ok":false,"errors":["areas/sync/flows/reconnect line 5: \";\" in message text …"],"more":2}`, and `{"type":"check","ok":true}` once after a failure is fixed. A clean edit prints nothing.
+
+Notes wait while the session is busy; the page shows them as queued. Saving or answering never blocks on the agent.
+
+## Bookkeeping (version, date, Changed tags)
+
+The agent doesn't maintain `version`, `updated`, `rev` or `changelog`. The server does:
+
+1. When `plan.js` changes and runs, the server fingerprints every item the page can tag, keyed like the nids: `areas/<a>`, `areas/<a>/flows|issues|work|sections|options|questions/<id>`, `api/<t>`, `api/<t>/m/<m>`, `roadmap/<id>`. Containers are hashed without their children, and bookkeeping fields (`rev`, `version`, `updated`, `changelog`, `replies`) are ignored.
+2. It diffs them against the last snapshot (`.live/revs.json`). Changed and added items get the current round; deleted ones drop out. The first snapshot is the baseline, so nothing is tagged on first serve.
+3. A **round** is a burst of edits. An edit more than 30 minutes (`PLAN_EXPLORER_ROUND_GAP_MS`) after the previous one opens a new round: version + 1. A `plan.version` set by hand that's higher wins. `updated` is the date of the last change.
+4. The served `plan.js` ends with `window.PLAN_AUTO = { version, updated, changed: [ids in the current round] }`. The engine tags those items "Changed v<version>" and shows that version and date in the sidebar.
+
+Backward compatible: plans that set `rev` and `version` by hand still tag `rev === version` items, and a page opened from a file (no server, no `PLAN_AUTO`) works exactly as before.
+
+## Notes file and anchors
+
+`<dir>/.live/notes.json` always holds every note in export format (`reference/schema.md`): mark, text, `nid`, `quote`, `anchorState` and reply. Read it to review everything at once. `anchorState` is one of:
+- `ok`: still on its target;
+- `moved`: the quote was found elsewhere;
+- `changed`: the element was rewritten;
+- `orphaned`: the target is gone. Notes on deleted ids keep their quote, so nothing is lost, but renaming ids for tidiness strands the user's notes.
+
+Use `quote` and `where` to see what the user pointed at.
+
+## Offline fallback
+
+A page opened from a file (an old copied `index.html`) has no server. Its notes are exported from the Notes page as `<plan-id>-notes-<date>.json`, usually into `~/Downloads`. Work through the notes whose `status` is `open` with the mark table in SKILL.md. Answer in `PLAN.replies[noteId] = { text, version }`. Without a server there is no automatic bookkeeping: bump `version`, set `rev` to it on what you change, and add a `changelog` entry. To get the user back online, run `live.mjs <dir>` and give them the URL.
 
 ## Adapters
 
-- **Agent in a live session** (Claude Code): run `live.mjs <dir>` under the Monitor tool, which turns each line into a message in the session. Answer with `reply` and edit `plan.js`; the page reloads. Everything shows in the terminal. See SKILL.md §2.
+- **Agent in a live session** (Claude Code): run `live.mjs <dir>` under the Monitor tool, which turns each line into a message in the session. Batching keeps that to one message per burst of notes. Answer with `reply` or `replies` and edit `plan.js`; the page reloads. Everything shows in the terminal. See SKILL.md §2.
 - **Any agent CLI** (`--exec`): one process per note, run in `<dir>`. The prompt (the note plus the mark rules) goes to stdin, and stdout streams back to the page as the reply. Environment: `PLAN_DIR`, `PLAN_FILE`, `PLAN_NOTE_ID`. Examples: `--exec "claude -p --allowedTools Read,Edit"`, `--exec "codex exec -"`, `--exec "ollama run qwen3"`, `--exec "llm -m <model>"`.
 - **Anything else**: tail `.live/asks.jsonl` and `POST /live/answer` (below).
 
@@ -59,7 +110,7 @@ Every `/live/*` call needs the token: the cookie, the `x-live-token` header, or 
 
 ## State (`<dir>/.live/`, git-ignored, mode 700)
 
-`server.json` (port, token, pid, URLs) · `server.log` · `asks.jsonl` (append-only) · `answers.json` (latest per note) · `notes.json` (export format, always current) · `notes-raw.json` · `deleted.json` (tombstones) · `listener.json` (heartbeat, mode) · `spawn.lock` (while starting).
+`server.json` (port, token, pid, URLs) · `server.log` · `asks.jsonl` (append-only, full asks) · `answers.json` (latest per note) · `notes.json` (export format, always current) · `notes-raw.json` · `deleted.json` (tombstones) · `listener.json` (heartbeat, mode) · `revs.json` (bookkeeping snapshot: fingerprints, round per id, version, last change) · `changelog.json` (from `log`) · `spawn.lock` (while starting).
 
 **Lifecycle.** A server is trusted only if it answers `/live/hello` with its token and the pid in `server.json`; a stale pid is never killed. Starts are serialized by `spawn.lock`. A server with no open page and no listener for 6 hours exits.
 
