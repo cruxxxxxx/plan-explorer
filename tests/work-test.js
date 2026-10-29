@@ -12,10 +12,16 @@ async function run() {
   await wait(2500);
   const page = q$("#page");
   ok("no severity anywhere", !page.querySelector('[class*="sev-"]') && !/Severity/.test(page.textContent));
-  ok("Type facet instead", q$$(".frow .kicker").some(k => k.textContent === "Type"));
+  ok("filters folded by default", !q$(".fpanel"));
+  q$('[data-act="facets"]').click();
+  await wait(200);
+  ok("Type facet instead", q$$(".fpanel .kicker").some(k => k.textContent === "Type") && !q$$(".fpanel .kicker").some(k => k.textContent === "Severity"));
+  q$('[data-act="facets"]').click();
+  await wait(200);
   ok("kind chip says Work", q$$('[data-ex="kind:issue"]').some(b => b.textContent === "Work"));
   ok("status chips say To do / Done", !!q$$('[data-ex="status:open"]').find(b => b.textContent.startsWith("To do")) && !!q$$('[data-ex="status:closed"]').find(b => b.textContent.startsWith("Done")));
   ok("work rows under flows", !!q$('.irows.inflow [data-open-issue="local-store/op-log-table"]'));
+  ok("rows stay quiet (no file names)", !q$("#page .irow .im code"));
   ok("row tone by type", q$('[data-open-issue="local-store/op-log-table"]').classList.contains("ty-new") && q$('[data-open-issue="local-store/append-durability"]').classList.contains("ty-risk"));
   ok("work ordered by step", (() => {
     const ids = q$$('.irows.inflow [data-open-issue^="local-store/"]').map(b => b.dataset.openIssue.split("/")[1]);
@@ -27,8 +33,14 @@ async function run() {
   q$('[data-ex="type:risk"]').click();
   await wait(300);
   ok("type filter", q$$("#page .irow").length === 1 && !!q$('[data-open-issue="local-store/append-durability"]'));
-  q$('[data-ex="type:risk"]').click();
+  ok("active filter pill shows", !!q$('.factive .fpill[data-ex="type:risk"]'));
+  q$('.factive .fpill[data-ex="type:risk"]').click();
   await wait(300);
+  ok("pill clears filter", !q$(".factive") && q$$("#page .irow").length > 1);
+  q$('[data-open-issue="local-store/op-log-table"]').click();
+  ok("drawer steps through items", /1 \/ \d+/.test(q$(".dr-nav").textContent));
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true }));
+  ok("j goes to next item", /2 \/ \d+/.test(q$(".dr-nav").textContent));
   q$('[data-open-issue="local-store/append-durability"]').click();
   ok("drawer shows work fields", /Mitigation/.test(q$("#drawer").textContent) && /Risk/.test(q$("#drawer").textContent) && !/Severity|High|Medium/.test(q$("#drawer").textContent));
   ok("work nid", !!q$('#drawer [data-nid="areas/local-store/work/append-durability"]'));

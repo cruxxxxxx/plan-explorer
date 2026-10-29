@@ -291,11 +291,31 @@ nav .nav { grid-template-columns: 1fr auto; font-size: 15px; padding: 9px 0; }
 .goals { margin: 4px 0 24px; }
 .goals summary { cursor: pointer; font-size: 13px; color: var(--ink-2); }
 .goalgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 12px; }
-.xbar { margin: 28px 0 10px; display: flex; }
-.facets { display: flex; flex-direction: column; gap: 6px; padding-bottom: 18px; border-bottom: 1px solid var(--rule-soft); }
-.frow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.frow > .kicker { width: 72px; flex: none; }
-.fsep { width: 12px; }
+.xbar { margin: 28px 0 0; display: flex; }
+/* explore controls: one quiet line (tabs · status · filter), details behind the Filter button */
+.xtabs { display: flex; align-items: center; gap: 4px 20px; flex-wrap: wrap; border-bottom: 1px solid var(--rule-soft); margin-top: 6px; }
+.tabs { display: flex; gap: 2px 18px; flex-wrap: wrap; }
+.tab { background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 10px 0 9px; font: 500 14px var(--sans); color: var(--ink-3); cursor: pointer; }
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--ink); border-bottom-color: var(--ink); }
+.xctl { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.stat { display: flex; gap: 10px; font-size: 13px; }
+.stat button { background: none; border: 0; padding: 0; font: inherit; color: var(--ink-3); cursor: pointer; }
+.stat button.on { color: var(--ink); font-weight: 600; }
+.stat button:hover { color: var(--ink); }
+.fbtn { background: none; border: 1px solid var(--rule-soft); border-radius: 999px; padding: 4px 12px; font: 500 13px var(--sans); color: var(--ink-2); cursor: pointer; }
+.fbtn:hover, .fbtn.on { border-color: var(--ink); color: var(--ink); }
+.fbtn .n { display: inline-block; min-width: 16px; margin-left: 6px; padding: 0 5px; border-radius: 999px; background: var(--ink); color: var(--bg); font-size: 11px; font-weight: 600; }
+.factive { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
+.fpill { display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 0; border-radius: 999px; padding: 3px 8px 3px 10px; font: 13px var(--sans); color: var(--ink); cursor: pointer; text-decoration: none; }
+.fpill::after { content: "×"; color: var(--ink-3); font-size: 15px; line-height: 1; }
+.fpill:hover::after { color: var(--accent); }
+.fpanel { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 10px 14px; padding: 16px 0; border-bottom: 1px solid var(--rule-soft); }
+.fpanel > .kicker { padding-top: 7px; }
+.fpanel .fopts { display: flex; flex-wrap: wrap; gap: 6px; }
+.fpanel .chip { border-color: transparent; background: var(--panel); }
+.fpanel .chip.on { background: var(--ink); color: var(--bg); }
+.fpanel .chip .cc { opacity: .55; }
 .chip { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; padding: 5px 10px; border-radius: 999px; }
 .sevchip .idot { margin-right: 6px; }
 .xarea { padding: 28px 0 8px; border-bottom: 1px solid var(--rule-soft); }
@@ -314,7 +334,7 @@ button.sevpill.on, button.sevpill:hover { border-color: var(--sev); }
 .idot { width: 8px; height: 8px; border-radius: 50%; background: var(--sev, var(--ink-3)); display: inline-block; flex: none; }
 .irows { margin: 4px 0 20px; }
 .irows.inflow { margin-top: -30px; }
-.irow { display: grid; grid-template-columns: 14px 1fr auto auto; gap: 10px; align-items: baseline; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--rule-soft); padding: 9px 4px; font: 15px/1.4 var(--sans); color: var(--ink); cursor: pointer; }
+.irow { display: grid; grid-template-columns: 14px 1fr auto auto; gap: 12px; align-items: baseline; width: 100%; text-align: left; background: transparent; border: 0; border-bottom: 1px solid var(--rule-soft); padding: 9px 4px; font: 15px/1.4 var(--sans); color: var(--ink); cursor: pointer; }
 .irow:hover { background: var(--sev-bg, var(--panel)); }
 .irow .idot { transform: translateY(-1px); }
 .irow .im { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
@@ -359,6 +379,10 @@ svg .stepdot { cursor: pointer; }
 .dr-head { position: sticky; top: 0; background: var(--bg); display: flex; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--rule-soft); margin-bottom: 16px; z-index: 1; }
 .dr-body .issue { background: none; border-left-width: 3px; padding: 4px 0 0 16px; }
 .dr-body .kicker a { text-decoration: none; }
+.dr-nav { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
+.dr-nav button { background: none; border: 1px solid var(--rule-soft); border-radius: 4px; width: 26px; height: 24px; color: var(--ink-2); cursor: pointer; font-size: 14px; line-height: 1; }
+.dr-nav button:hover:not([disabled]) { border-color: var(--ink); color: var(--ink); }
+.dr-nav button[disabled] { opacity: .35; cursor: default; }
 .steph { margin: 4px 0; font-size: 18px; }
 .drmore { margin-top: 24px; }
 @media (min-width: 1300px) { body.drawer-open main { padding-right: 540px; } }
@@ -487,7 +511,7 @@ body.notemode::after { content: ""; position: fixed; inset: 0; border: 3px solid
 <script>
 (() => {
 "use strict";
-const ENGINE_VERSION = "2.3.0";
+const ENGINE_VERSION = "2.4.0";
 let P = window.PLAN;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -807,11 +831,11 @@ function sectionBlock(a, s) {
 
 // ── issues ──────────────────────────────────────────────────────────────
 function issueRow(a, i) {
-  const where = [].concat(i.where || []);
   const label = `${a.title} › ${i.title}`;
+  // Rows stay quiet: dot, title, one tag. Files, origin and the rest live in the drawer.
   const meta = isFinding(i)
-    ? [i.category ? esc(i.category) : "", where[0] ? `<code>${esc(fileOf(where[0]).split("/").pop())}</code>` : "", i.origin === "pre-existing" ? "on base" : "", isOpenIssue(i) ? "" : esc(i.status)]
-    : [esc(tagOf(i)), where[0] ? `<code>${esc(fileOf(where[0]).split("/").pop())}</code>` : "", i.status && i.status !== "todo" ? esc(i.status) : ""];
+    ? [i.category ? esc(i.category) : "", isOpenIssue(i) ? "" : esc(i.status)]
+    : [esc(tagOf(i)), i.status && i.status !== "todo" ? esc(i.status) : ""];
   return `<button class="irow ${toneOf(i)}${isOpenIssue(i) ? "" : " closed"}" data-open-issue="${esc(a.id)}/${esc(i.id)}"${reg(issueNid(a, i), label, i.title)}>
     <span class="idot"></span><span class="it">${inline(i.title)}</span>
     <span class="im">${meta.filter(Boolean).join(" · ")}</span>${chg(i)}
@@ -856,7 +880,7 @@ function issueCard(a, i) {
 }
 
 // ── explore (home) ──────────────────────────────────────────────────────
-const ex = { q: "", kind: "all", sev: "all", type: "all", cat: "all", status: "open", origin: "all" };
+const ex = { q: "", kind: "all", sev: "all", type: "all", cat: "all", status: "open", origin: "all", panel: false };
 const KINDS = [["all", "Everything"], ["flow", "Flows"], ["issue", "Issues"], ["question", "Questions"], ["option", "Options"], ["section", "Write-ups"], ["api", "API"]];
 function issuePass(i, q) {
   return (ex.sev === "all" || (isFinding(i) && sevKey(i.severity) === ex.sev)) &&
@@ -884,6 +908,14 @@ function viewExplore(areaId) {
   const openLabel = works.length && !finds.length ? "To do" : "Open";
   const closedLabel = finds.length && !works.length ? "Fixed / won't fix" : works.length && !finds.length ? "Done" : "Closed";
   const types = WORK_TYPES.filter(t => works.some(x => workType(x.i) === t));
+  const pill = (key, label) => `<button class="fpill" data-ex="${key}">${esc(label)}</button>`;
+  const active = [
+    area ? `<a class="fpill" href="#explore">${esc(area.title)}</a>` : "",
+    ex.type !== "all" ? pill(`type:${ex.type}`, WORK_LABEL[ex.type] || ex.type) : "",
+    ex.sev !== "all" ? pill(`sev:${ex.sev}`, sevLabel(ex.sev)) : "",
+    ex.cat !== "all" ? pill(`cat:${ex.cat}`, ex.cat) : "",
+    ex.origin !== "all" ? pill(`origin:${ex.origin}`, ORIGIN[ex.origin] || ex.origin) : ""
+  ].filter(Boolean);
   const idx = areas().indexOf(area);
   return `
   <div class="kicker"><span class="sq"></span>${area ? `Area ${pad(idx + 1)} / ${pad(areas().length)} ${statusTag(area.status)} ${chg(area)}` : `Plan${P.version != null ? ` · v${esc(P.version)}` : ""}${P.updated ? ` · ${esc(P.updated)}` : ""}`}</div>
@@ -892,14 +924,21 @@ function viewExplore(areaId) {
     : (o.summary ? `<div class="lede">${md(o.summary, "overview/summary", "Summary")}</div>` : "")}
   ${!area && ((o.goals || []).length || (o.nonGoals || []).length) ? `<details class="goals"><summary>Goals and non-goals</summary><div class="goalgrid"><div>${rows("Goals", o.goals, "overview/goals")}</div><div>${rows("Non-goals", o.nonGoals, "overview/nonGoals")}</div></div></details>` : ""}
   <div class="xbar"><input class="search" id="exq" type="search" placeholder="Search ${word.toLowerCase()}, flows, questions, API…" value="${esc(ex.q)}" autocomplete="off"></div>
-  <div class="facets">
-    <div class="frow"><span class="kicker">Area</span><a class="chip${!area ? " on" : ""}" href="#explore">All</a>${areas().map(a => `<a class="chip${area === a ? " on" : ""}" href="#explore/${esc(a.id)}">${esc(a.title)}${itemsOf(a).filter(isOpenIssue).length ? `<span class="cc">${itemsOf(a).filter(isOpenIssue).length}</span>` : ""}</a>`).join("")}</div>
-    <div class="frow"><span class="kicker">Show</span>${KINDS.filter(([k]) => (k !== "api" || apiTypes().length) && (k !== "issue" || iss.length)).map(([k, l]) => chip("kind", k, k === "issue" ? word : l)).join("")}</div>
-    ${types.length ? `<div class="frow"><span class="kicker">Type</span>${chip("type", "all", "Any")}${types.map(t => `<button class="chip sevchip ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}"><span class="idot"></span>${WORK_LABEL[t]}<span class="cc">${countBy(i => !isFinding(i) && workType(i) === t && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
-    ${finds.length ? `<div class="frow"><span class="kicker">Severity</span>${chip("sev", "all", "Any")}${SEVERITIES.map(s => `<button class="chip sevchip ${sevClass(s)}${ex.sev === s ? " on" : ""}" data-ex="sev:${s}"><span class="idot"></span>${sevLabel(s)}<span class="cc">${countBy(i => isFinding(i) && sevKey(i.severity) === s && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
-    ${cats.length > 1 ? `<div class="frow"><span class="kicker">Category</span>${chip("cat", "all", "Any")}${cats.map(c => chip("cat", c, c, countBy(i => i.category === c && isOpenIssue(i)))).join("")}</div>` : ""}
-    ${iss.length ? `<div class="frow"><span class="kicker">Status</span>${chip("status", "open", openLabel, countBy(isOpenIssue))}${chip("status", "closed", closedLabel, countBy(i => !isOpenIssue(i)))}${chip("status", "all", "All")}${origins.length ? `<span class="fsep"></span>${chip("origin", "all", "Any origin")}${origins.map(v => chip("origin", v, ORIGIN[v] || v, countBy(i => i.origin === v))).join("")}` : ""}</div>` : ""}
+  <div class="xtabs">
+    <div class="tabs" role="tablist">${KINDS.filter(([k]) => (k !== "api" || apiTypes().length) && (k !== "issue" || iss.length)).map(([k, l]) => `<button class="tab${ex.kind === k ? " on" : ""}" data-ex="kind:${k}">${k === "issue" ? word : l}</button>`).join("")}</div>
+    <div class="xctl">
+      ${iss.length ? `<div class="stat">${[["open", `${openLabel} ${countBy(isOpenIssue)}`], ["closed", closedLabel], ["all", "All"]].map(([v, l]) => `<button class="${ex.status === v ? "on" : ""}" data-ex="status:${v}">${esc(l)}</button>`).join("")}</div>` : ""}
+      <button class="fbtn${ex.panel ? " on" : ""}" data-act="facets">Filter${active.length ? `<span class="n">${active.length}</span>` : ""}</button>
+    </div>
   </div>
+  ${active.length ? `<div class="factive">${active.join("")}</div>` : ""}
+  ${ex.panel ? `<div class="fpanel">
+    <span class="kicker">Area</span><div class="fopts"><a class="chip${!area ? " on" : ""}" href="#explore">All</a>${areas().map(a => `<a class="chip${area === a ? " on" : ""}" href="#explore/${esc(a.id)}">${esc(a.title)}${itemsOf(a).filter(isOpenIssue).length ? `<span class="cc">${itemsOf(a).filter(isOpenIssue).length}</span>` : ""}</a>`).join("")}</div>
+    ${types.length ? `<span class="kicker">Type</span><div class="fopts">${types.map(t => `<button class="chip sevchip ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}"><span class="idot"></span>${WORK_LABEL[t]}<span class="cc">${countBy(i => !isFinding(i) && workType(i) === t && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
+    ${finds.length ? `<span class="kicker">Severity</span><div class="fopts">${SEVERITIES.map(v => `<button class="chip sevchip ${sevClass(v)}${ex.sev === v ? " on" : ""}" data-ex="sev:${v}"><span class="idot"></span>${sevLabel(v)}<span class="cc">${countBy(i => isFinding(i) && sevKey(i.severity) === v && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
+    ${cats.length > 1 ? `<span class="kicker">Category</span><div class="fopts">${cats.map(c => chip("cat", c, c, countBy(i => i.category === c && isOpenIssue(i)))).join("")}</div>` : ""}
+    ${origins.length ? `<span class="kicker">Origin</span><div class="fopts">${origins.map(v => chip("origin", v, ORIGIN[v] || v, countBy(i => i.origin === v))).join("")}</div>` : ""}
+  </div>` : ""}
   <div id="ex-results">${exploreResults(area)}</div>`;
 }
 function exploreResults(area) {
@@ -1234,12 +1273,29 @@ function openDrawer(item, push = true) {
   if (push && drawerCur) { drawerStack.push(drawerCur); }
   if (!push) { drawerStack.length = 0; }
   drawerCur = item;
-  drawer.innerHTML = `<div class="dr-head">${drawerStack.length ? `<button class="lnk" data-dr="back">← Back</button>` : "<span></span>"}<button class="lnk" data-dr="close">Close <kbd>Esc</kbd></button></div><div class="dr-body">${drawerBody(item)}</div>`;
+  const seq = item.kind === "issue" ? visibleItems() : [];
+  const at = seq.indexOf(`${item.area}/${item.id}`);
+  const nav = at >= 0 && seq.length > 1
+    ? `<span class="dr-nav"><button data-dr="prev" title="Previous (k)"${at === 0 ? " disabled" : ""}>‹</button>${at + 1} / ${seq.length}<button data-dr="next" title="Next (j)"${at === seq.length - 1 ? " disabled" : ""}>›</button></span>`
+    : "";
+  drawer.innerHTML = `<div class="dr-head">${drawerStack.length ? `<button class="lnk" data-dr="back">← Back</button>` : nav || "<span></span>"}<button class="lnk" data-dr="close">Close <kbd>Esc</kbd></button></div><div class="dr-body">${drawerBody(item)}</div>`;
   drawer.hidden = false;
   drawer.scrollTop = 0;
   document.body.classList.add("drawer-open");
   hideTip();
   applyAnchors();
+}
+// Items in page order, as currently filtered, so the drawer can walk them one at a time.
+const visibleItems = () => [...new Set($$("#page [data-open-issue]").map(e => e.getAttribute("data-open-issue")))];
+function stepDrawer(d) {
+  if (!drawerCur || drawerCur.kind !== "issue") { return; }
+  const seq = visibleItems();
+  const next = seq[seq.indexOf(`${drawerCur.area}/${drawerCur.id}`) + d];
+  if (!next) { return; }
+  const [area, id] = next.split("/");
+  openDrawer({ kind: "issue", area, id }, false);
+  const row = $(`#page [data-open-issue="${CSS.escape(next)}"]`);
+  if (row) { row.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
 }
 function closeDrawer() {
   drawer.hidden = true;
@@ -2268,6 +2324,9 @@ function handleAct(act, el) {
   const n = card ? noteById(card.dataset.note) : null;
   if (act === "notemode") {
     setNoteMode(!noteMode);
+  } else if (act === "facets") {
+    ex.panel = !ex.panel;
+    render(false, scrollY);
   } else if (act === "export") {
     exportNotes();
   } else if (act === "copy") {
@@ -2308,7 +2367,13 @@ document.addEventListener("click", e => {
     const act = el.dataset.pz;
     if (act === "in") { zoomPZ(c, 1.25); } else if (act === "out") { zoomPZ(c, 0.8); } else if (act === "fit") { fitPZ(c); } else if (act === "full") { openLightbox(c); }
   } else if ((el = t.closest("[data-dr]"))) {
-    if (el.dataset.dr === "back") { drawerBack(); } else { closeDrawer(); }
+    if (el.dataset.dr === "back") {
+      drawerBack();
+    } else if (el.dataset.dr === "prev" || el.dataset.dr === "next") {
+      stepDrawer(el.dataset.dr === "next" ? 1 : -1);
+    } else {
+      closeDrawer();
+    }
   } else if ((el = t.closest("[data-open-issue]"))) {
     e.preventDefault();
     const [area, id] = el.getAttribute("data-open-issue").split("/");
@@ -2382,7 +2447,16 @@ document.addEventListener("keydown", e => {
     }
     return;
   }
-  if (e.key.toLowerCase() === "n" && !e.metaKey && !e.ctrlKey && !e.altKey) { setNoteMode(!noteMode); }
+  if (e.metaKey || e.ctrlKey || e.altKey) { return; }
+  if (e.key.toLowerCase() === "n") {
+    setNoteMode(!noteMode);
+  } else if (!drawer.hidden && (e.key === "j" || e.key === "ArrowDown")) {
+    e.preventDefault();
+    stepDrawer(1);
+  } else if (!drawer.hidden && (e.key === "k" || e.key === "ArrowUp")) {
+    e.preventDefault();
+    stepDrawer(-1);
+  }
 });
 const dropAlt = () => {
   document.body.classList.remove("altpick");
