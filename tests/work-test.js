@@ -43,14 +43,14 @@ async function run() {
   ok("j goes to next item", /2 \/ \d+/.test(q$(".dr-nav").textContent));
   q$('[data-open-issue="local-store/append-durability"]').click();
   ok("drawer shows work fields", /Mitigation/.test(q$("#drawer").textContent) && /Risk/.test(q$("#drawer").textContent) && !/Severity|High|Medium/.test(q$("#drawer").textContent));
-  ok("work nid", !!q$('#drawer [data-nid="areas/local-store/work/append-durability"]'));
+  ok("work nid", !!q$('#drawer [data-nid="areas/local-store/items/append-durability"]'));
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   ok("sidebar count title", /open work/.test(q$("#side .cnt").getAttribute("title") || ""));
 
   // ── <br> in a message: Mermaid draws two lines, still one step ──
   const unsynced = q$$("text.messageText").find(t => t.textContent === "read unsynced ops");
-  ok("<br> keeps later steps aligned", !!unsynced && /\/msg\/1$/.test(unsynced.getAttribute("data-nid") || ""), unsynced && unsynced.getAttribute("data-nid"));
-  ok("<br> lines share one step", q$$("text.messageText").filter(t => /^(load snapshot|\(note_view\))$/.test(t.textContent)).every(t => /\/msg\/0$/.test(t.getAttribute("data-nid") || "")));
+  ok("<br> keeps later steps aligned", !!unsynced && window.planExplorer.msgIndex(unsynced.getAttribute("data-nid")) === 1, unsynced && unsynced.getAttribute("data-nid"));
+  ok("<br> lines share one step", q$$("text.messageText").filter(t => /^(load snapshot|\(note_view\))$/.test(t.textContent)).every(t => window.planExplorer.msgIndex(t.getAttribute("data-nid")) === 0));
 
   // ── note prefixes: only the literal mark symbols ──
   const { parsePrefix, inline } = window.planExplorer;

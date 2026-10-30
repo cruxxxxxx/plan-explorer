@@ -22,6 +22,8 @@ sequenceDiagram
   participant Log as Op log
   %% ->> is a request, -->> is a reply
   U->>UI: types a sentence
+  %% an anchor names the message below it, so items can use steps: ["append"]
+  %% @append
   UI->>Log: append op
   Log-->>UI: ok
   Note over Log: ops queue until online
@@ -40,13 +42,14 @@ sequenceDiagram
 - Use `alt/else/end`, `opt/end`, `loop/end` and `par/and/end` for branching. Don't nest more than one level deep.
 - Avoid `;`, `#`, `{}` and raw `<`/`>` in message text (the lint flags them). Write "and" or "then" instead of `;`. `<br>` is fine.
 - Don't use `autonumber`. It adds noise, and notes already identify messages.
+- Put `%% @name` on its own line directly above every message an item is pinned to. Items and notes then follow the message, not its position.
 - Only `sequenceDiagram` gets per-message note targets. Other Mermaid types render, but notes attach to the whole flow.
 
 ## Checking: which tool when
 
 | tool | cost | catches | run it |
 |---|---|---|---|
-| `scripts/check.mjs <dir>/plan.js` | instant, no browser | plan structure, ids, links, and a static Mermaid lint of every `sequenceDiagram` | after every edit. While live, the listener runs it for you and prints a `check` line only on failure. |
+| `scripts/check.mjs <dir>/plan.js` | instant, no browser | plan structure, ids, items, links, step anchors (unknown, duplicate, malformed, misplaced), and a static Mermaid lint of every `sequenceDiagram` | after every edit. While live, the listener runs it for you and prints a `check` line only on failure. |
 | `scripts/verify.sh <dir>` | headless Chrome, needs network | everything Mermaid itself rejects, in every diagram type | once after seeding, after structural diagram changes (new flows, participants or blocks), for flowcharts, and whenever the page shows "Diagram error". |
 
 The static lint was calibrated against the engine's pinned Mermaid. Errors (each with its line number):

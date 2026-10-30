@@ -83,7 +83,8 @@ check "slim note: no planFile, markName, at, plan" "$(printf '%s' "$ask" | js '[
 check "slim note: keeps noteId, mark, text, where, nid, quote, reply" "$(printf '%s' "$ask" | js '["noteId","mark","text","where","nid","quote","reply"].every(k => k in j)')" true
 check "slim note: element text not repeated when the quote has it" "$(printf '%s' "$ask" | js '"target" in j')" false
 check "slim note under 600 bytes" "$(printf '%s' "$ask" | js 'Buffer.byteLength(JSON.stringify(j)) < 600')" true
-check "served plan.js carries PLAN_AUTO baseline" "$(curl -s -H "Cookie: $cookie" "$base/plan.js" | grep -c 'window.PLAN_AUTO = {"version":2,"updated":null,"changed":\[\]}')" 1
+check "served plan.js carries PLAN_AUTO (null before any change)" "$(curl -s -H "Cookie: $cookie" "$base/plan.js" | grep -c '^;window.PLAN_AUTO = null;$')" 1
+check "viewing a plan writes no history.json" "$(test -e "$tmp/site/history.json" && echo yes || echo no)" no
 check "status: agent listening" "$(node "$LIVE" status "$tmp/site" | grep -c '"agent": "listening"')" 1
 sleep 1
 node "$LIVE" reply "$tmp/site" "$note" --status working "Checking the view code" > /dev/null
@@ -107,9 +108,26 @@ check "edit tags the changed item and bumps the version" "$(auto | js 'j.version
 check "updated date set by the server" "$(auto | js '/^\d{4}-\d\d-\d\d$/.test(j.updated)')" true
 check "revs snapshot kept in .live" "$(test -f "$tmp/site/.live/revs.json" && echo yes)" yes
 node -e 'const f=process.argv[1];const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("Do we batch pushes, or stream ops one by one?","Do we batch pushes?"))' "$tmp/site/plan.js"
-check "second edit in the same round adds to the tags, no new version" "$(auto | js 'j.version + " " + j.changed.sort().join(",")')" "3 areas/local-store,areas/sync/questions/batching"
+check "second edit in the same round adds to the tags, no new version" "$(auto | js 'j.version + " " + j.changed.sort().join(",")')" "3 areas/local-store,areas/sync/items/batching"
+# history.json: committed next to plan.js, so the bookkeeping travels with the plan. plan.js is never rewritten.
+hist="$tmp/site/history.json"
+check "history.json written next to plan.js" "$(js 'j.version + " " + j.changed.length + " " + /^\d{4}-\d\d-\d\d$/.test(j.updated)' < "$hist")" "3 2 true"
+check "history.json is not under .live and is readable (0644)" "$(stat -f '%Lp' "$hist" 2>/dev/null || stat -c '%a' "$hist")" 644
+check "history.json changelog seeded from PLAN.changelog" "$(js 'j.changelog.length' < "$hist")" 2
+check "server never rewrites plan.js" "$(grep -c 'PLAN_AUTO' "$tmp/site/plan.js")" 0
+check "history.json needs the token" "$(code "$base/history.json")" 401
+check "history.json served with cookie" "$(curl -s -H "Cookie: $cookie" "$base/history.json" | js 'j.version')" 3
 node "$LIVE" log "$tmp/site" "Shortened the batching question" > /dev/null
-check "log appends one changelog entry with the changed ids" "$(js 'j.length + " " + j[0].version + " " + j[0].changed.length' < "$tmp/site/.live/changelog.json")" "1 3 2"
+check "log appends one changelog entry with the changed ids to history.json" "$(js 'const e = j.changelog[j.changelog.length - 1]; j.changelog.length + " " + e.version + " " + e.changed.length + " " + e.what' < "$hist")" "3 3 2 Shortened the batching question"
+check "status reports the history version" "$(node "$LIVE" status "$tmp/site" | js 'j.version + " " + j.changed.length')" "3 2"
+# An edit to history.json the server didn't make (git pull) reaches the page: served PLAN_AUTO and a plan event.
+curl -s -N --max-time 3 -H "Cookie: $cookie" "$base/live/events" > "$tmp/events.txt" 2>/dev/null &
+sleep 0.8
+node -e 'const f=process.argv[1];const fs=require("fs");const h=JSON.parse(fs.readFileSync(f,"utf8"));h.version=5;fs.writeFileSync(f,JSON.stringify(h,null,2)+"\n")' "$hist"
+sleep 2.4
+check "external history.json edit triggers a page reload event" "$(grep -c '^event: plan' "$tmp/events.txt")" 1
+check "served PLAN_AUTO follows history.json" "$(auto | js 'j.version')" 5
+check "the next edit continues from the history version" "$(node -e 'const f=process.argv[1];const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("Do we batch pushes?","Do we batch pushes, ever?"))' "$tmp/site/plan.js"; sleep 0.6; auto | js 'j.version')" 5
 
 # ── batching: notes saved together reach the agent as one line ──
 ask() { curl -s -X POST -H "x-live-token: $token" -H 'content-type: application/json' "$base/live/ask" -d "$1" > /dev/null; }
@@ -168,13 +186,14 @@ bport=$(field "$tmp/bk/.live/server.json" port)
 btoken=$(field "$tmp/bk/.live/server.json" token)
 bauto() { curl -s -H "x-live-token: $btoken" "http://127.0.0.1:$bport/plan.js" | sed -n 's/^;window.PLAN_AUTO = \(.*\);$/\1/p'; }
 bedit() { node -e 'const [f,a,b]=process.argv.slice(1);const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace(a,b))' "$tmp/bk/plan.js" "$1" "$2"; }
-check "baseline: nothing tagged, version from plan.js" "$(bauto | js 'j.version + ":" + j.changed.length')" "1:0"
+check "baseline: nothing tagged, no history yet" "$(bauto)" "null"
 bedit 'Compact the op log on sync ack, or on a timer?' 'Compact the op log on sync ack?'
-check "round 2: new question tagged" "$(bauto | js 'j.version + ":" + j.changed.join()')" "2:areas/local-store/questions/compaction"
+check "round 2: changed question item tagged" "$(bauto | js 'j.version + ":" + j.changed.join()')" "2:areas/local-store/items/compaction"
 bedit '"Ops not yet acked, oldest first."' '"Ops not yet acked, oldest first, at most 500."'
-bedit '{ id: "m2", stage: "Sync"' '{ id: "m3", stage: "Conflicts", items: ["Three-way merge"] },
-    { id: "m2", stage: "Sync"'
-check "same round: member and new roadmap stage added" "$(bauto | js 'j.version + ":" + j.changed.sort().join()')" "2:api/op-log/m/unsynced,areas/local-store/questions/compaction,roadmap/m3"
+bedit 'id: "m2",' 'id: "m3", stage: "Conflicts", items: ["Three-way merge"] },
+    {
+      id: "m2",'
+check "same round: member and new roadmap stage added" "$(bauto | js 'j.version + ":" + j.changed.sort().join()')" "2:api/op-log/m/unsynced,areas/local-store/items/compaction,roadmap/m3"
 bedit 'version: 1,' 'version: 1, rev: 9,'
 check "bookkeeping-only edits change nothing" "$(bauto | js 'j.version + ":" + j.changed.length')" "2:3"
 sleep 1.2
@@ -182,5 +201,30 @@ bedit '"Simple to inspect"' '"Simple to inspect with cat"'
 check "after a quiet gap: round 3 tags only the new change" "$(bauto | js 'j.version + ":" + j.changed.join()')" "3:areas/local-store/options/files"
 bedit 'version: 1,' 'version: 7,'
 check "a higher plan.version set by hand wins" "$(bauto | js 'j.version')" 7
+
+# ── one item model + anchors: migrating an old plan is not a change; moving an anchored message is ──
+mkdir -p "$tmp/mig"
+cp "$S/tests/fixtures/legacy-plan.js" "$tmp/mig/plan.js"
+PLAN_EXPLORER_ROUND_GAP_MS=1000 node "$LIVE" serve "$tmp/mig" --port 0 > "$tmp/mig.log" 2>&1 &
+pids+=($!)
+for _ in $(seq 80); do grep -q '"ready"' "$tmp/mig.log" 2>/dev/null && break; sleep 0.1; done
+mport=$(field "$tmp/mig/.live/server.json" port)
+mtoken=$(field "$tmp/mig/.live/server.json" token)
+mauto() { curl -s -H "x-live-token: $mtoken" "http://127.0.0.1:$mport/plan.js" | sed -n 's/^;window.PLAN_AUTO = \(.*\);$/\1/p'; }
+check "legacy plan: baseline" "$(mauto)" "null"
+node "$S/scripts/migrate-plan.mjs" "$tmp/mig/plan.js" --out "$tmp/mig.next" 2> /dev/null && cat "$tmp/mig.next" > "$tmp/mig/plan.js"
+check "migrated to items with anchors" "$(grep -c '%% @' "$tmp/mig/plan.js" | awk '$1 > 0 {print "yes"}')" yes
+check "migration (issues/work → items, cause/fix → why/how, numeric steps → anchors) tags nothing" "$(mauto)" "null"
+# Insert a message above an anchored one: the flow changes; items pinned by anchor still point at the same message.
+node -e 'const f=process.argv[1];const fs=require("fs");fs.writeFileSync(f,fs.readFileSync(f,"utf8").replace("U->>UI: types a sentence","U->>UI: opens a note\n  U->>UI: types a sentence"))' "$tmp/mig/plan.js"
+check "inserted message: only the flow is tagged, anchored items are not" "$(mauto | js 'j.changed.join()')" "areas/local-store/flows/edit-offline"
+# Slim note events keep anchor-based nids.
+mask() { curl -s -X POST -H "x-live-token: $mtoken" -H 'content-type: application/json' "http://127.0.0.1:$mport/live/ask" -d "$1" > /dev/null; }
+node "$LIVE" listen "$tmp/mig" > "$tmp/mig.listen" 2>&1 &
+pids+=($!)
+sleep 0.8
+mask '{"note":{"id":"a1","mark":"?","text":"why here","where":"Editing while offline › append op","nid":"areas/local-store/flows/edit-offline/msg/@append-op","quote":"append op"},"target":"append op"}'
+for _ in $(seq 60); do grep -q '"noteId":"a1"' "$tmp/mig.listen" 2>/dev/null && break; sleep 0.1; done
+check "slim note keeps the anchor nid" "$(grep '"noteId":"a1"' "$tmp/mig.listen" | head -1 | js 'j.nid')" "areas/local-store/flows/edit-offline/msg/@append-op"
 
 [ "$fails" = 0 ]

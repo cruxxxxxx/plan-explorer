@@ -6,16 +6,18 @@
 window.PLAN = { … };
 ```
 
-Use template literals (backticks) for Mermaid sources. All text fields accept a small Markdown subset: `**bold**`, `*italic*`, `` `code` ``, `[link](url)`, blank-line paragraphs, and `- ` bullet lists. List-type fields (goals, pros, items, …) are inline Markdown only: no paragraphs or lists.
+The live server keeps `history.json` (`{ version, updated, changed, changelog }`) next to it; commit both, edit only `plan.js` (`live.md`, "Bookkeeping").
 
-Ids must be lowercase kebab-case (`[a-z0-9-]`, no slashes) and unique within their list. **Never rename an id once the user has seen the page.** Notes are attached to it.
+Use template literals (backticks) for Mermaid sources. All text fields accept a small Markdown subset: `**bold**`, `*italic*`, `` `code` ``, `[link](url)`, blank-line paragraphs, and `- ` bullet lists. List-type fields (goals, pros, roadmap items, …) are inline Markdown only: no paragraphs or lists.
+
+Ids must be lowercase kebab-case (`[a-z0-9-]`, no slashes) and unique within their list (all of an area's items share one list). Step anchors (`%% @name`) follow the same rules, per flow. **Never rename an id or anchor once the user has seen the page.** Notes are attached to it.
 
 ```js
 window.PLAN = {
   id: "offline-sync",             // required. Keys browser storage and names the export file
-  kind: "plan",                   // "plan" (work items, no severity) | "review" (findings with severity)
+  kind: "plan",                   // "plan" (neutral work items) | "review" (bugs with severity)
   title: "Offline sync for Notes",// required
-  version: 3,                     // optional while live: the server tracks versions (reference/live.md, Bookkeeping)
+  version: 3,                     // optional: the live server keeps version in history.json (reference/live.md, Bookkeeping)
   updated: "2026-10-28",          // optional while live: the server dates each change
 
   overview: {
@@ -38,46 +40,35 @@ window.PLAN = {
       mermaid: `sequenceDiagram
   participant D as Device
   participant API as Sync API
-  D->>API: push ops`,
+  %% @push
+  D->>API: push ops`,              // `%% @push` names the message below it (a step anchor)
       actors: { D: "sync-client", API: "sync-api" },  // participant id → api type id (tooltip, drawer, links)
       caption: "One line on what to notice. Markdown."
     }],
 
-    issues: [{                    // kind "review": findings, sorted by severity, softly colour-coded
-      id: "pause-skews-bridge",   // descriptive slug, never a tracker code
-      title: "Post-seek bridge keeps running while paused",
-      severity: "medium",         // high | medium | low
-      category: "Song clock",     // subsystem affected, not the file/library it lives in
-      where: ["Clock/SongClock.cs:145-168"],
-      origin: "introduced",       // introduced | pre-existing
-      flow: "reconnect",          // flow id in this area: listed under it, dotted on the diagram
-      steps: [2],                 // 1-based message numbers in that flow (any arrow, incl. -->> and self-messages)
-      types: ["song-clock"],      // optional api type ids; types whose source file is in `where` link automatically
-      status: "open",             // open | fixing | fixed | wontfix
-      summary: "One sentence: user-visible symptom. Markdown.",
-      trigger: "Exact reproduction conditions.",
-      cause: "Mechanism, naming fields, methods and values.",
-      impact: "What breaks, how badly, for whom.",
-      fix: "Concrete steps.",
-      verify: "Test or check that proves it.",
-      related: ["calibration-delay", "q-id", "api-type-id"],
-      rev: 3
-    }],
-
-    work: [{                      // kind "plan": what gets built, pinned to flow steps. Neutral colours.
-      id: "cursor-storage",       // descriptive slug, permanent
+    items: [{                     // everything pinned to a flow: findings, work, risks, decisions, questions
+      id: "cursor-storage",       // descriptive slug, never a tracker code. Permanent
+      type: "change",             // bug | risk | new | change | remove | decision | question
       title: "Store the cursor next to the op log",
-      type: "change",             // new | change | remove | risk | decision
-      status: "todo",             // todo | doing | done | dropped
-      flow: "reconnect", steps: [3], types: ["sync-client"],
-      where: ["src/sync/SyncClient.ts"],   // files to touch
-      summary: "One sentence. Markdown.",
-      why: "Current behaviour and why it changes (the cause, for fixes).",
-      how: "Concrete approach.",
-      impact: "Risks only: what goes wrong if it happens.",
-      mitigation: "Risks only: how it's prevented.",
-      verify: "Done when …",
-      related: ["…"], rev: 3
+      status: "open",             // open | doing | done | dropped (a question with an answer is done)
+      flow: "reconnect",          // flow id in this area: listed under it, dotted on the diagram
+      steps: ["push"],            // anchor names in that flow; or 1-based message numbers (shift on insert)
+      types: ["sync-client"],     // api type ids; types whose source file is in `where` link automatically
+      where: ["src/sync/SyncClient.ts:61"],
+      summary: "One sentence: the symptom, or the change. Markdown.",
+      trigger: "Exact reproduction conditions.",
+      why: "Mechanism or current behaviour, naming fields, methods and values.",
+      how: "Concrete steps (the fix, for a bug).",
+      impact: "What goes wrong, how badly, for whom.",
+      mitigation: "Risks: how it's prevented.",
+      verify: "Test or check that proves it / done when.",
+      answer: "Questions: filled in once known.",
+      related: ["other-item", "api-type-id"],
+      rev: 3,
+      // kind "review" only (type bug): severity colours the item, origin and category label it
+      severity: "medium",         // high | medium | low
+      origin: "introduced",       // introduced | pre-existing
+      category: "Song clock"      // subsystem affected, not the file/library it lives in
     }],
 
     sections: [{ id: "cursor", title: "Cursors", rev: 3, body: "Markdown, short." }],
@@ -88,13 +79,6 @@ window.PLAN = {
       body: "optional Markdown",
       pros: ["inline md", …],
       cons: ["inline md", …],
-      rev: 3
-    }],
-
-    openQuestions: [{
-      id: "batching",
-      text: "Claude's question for the user",
-      answer: "optional: filled in once known",
       rev: 3
     }]
   }],
@@ -134,7 +118,7 @@ window.PLAN = {
     "nmh3k2x9ab": { text: "Answer. Newlines OK, inline md.", version: 3 }
   },
 
-  changelog: [{ version: 3, date: "2026-10-28", what: "inline md summary of the round" }]  // optional; live: `live.mjs log`
+  changelog: [{ version: 3, date: "2026-10-28", what: "inline md summary of the round" }]  // optional, offline only; live: history.json via `live.mjs log`
 };
 ```
 
@@ -150,18 +134,16 @@ The engine gives every rendered element an id derived from the data:
 | area summary | `areas/<area>/summary/p0` |
 | section heading, paragraph, bullet | `areas/<area>/sections/<id>`, `…/p1`, `…/li0` |
 | whole flow, caption | `areas/<area>/flows/<id>`, `…/caption/p0` |
-| diagram message, actor, note | `…/flows/<id>/msg/<n>`, `…/actor/<participant id>`, `…/note/<n>` |
+| diagram message, actor, note | `…/flows/<id>/msg/@<anchor>` (or `msg/<n>`, 0-based, when unanchored), `…/actor/<participant id>`, `…/note/<n>` |
 | option, its pros and cons | `areas/<area>/options/<id>`, `…/pros/0`, `…/cons/1` |
-| issue title, summary, field paragraph | `areas/<area>/issues/<id>`, `…/summary/p0`, `…/fix/p0` (also `trigger`, `cause`, `impact`, `verify`) |
-| work title, summary, field paragraph | `areas/<area>/work/<id>`, `…/summary/p0`, `…/how/p0` (also `why`, `impact`, `mitigation`, `verify`) |
-| open question, answer | `areas/<area>/questions/<id>`, `…/answer` |
+| item title, summary, field paragraph | `areas/<area>/items/<id>`, `…/summary/p0`, `…/how/p0` (any text field: `why`, `answer`, …) |
 | roadmap stage, item | `roadmap/<id>`, `roadmap/<id>/<n>` |
 | API type, summary, body | `api/<type>`, `api/<type>/summary`, `api/<type>/body/p0` |
 | API member signature, doc, detail | `api/<type>/m/<member>`, `…/doc`, `…/detail/p0` |
 | API param, returns, throws | `api/<type>/m/<member>/param/<name>`, `…/returns`, `…/throws` |
 | dependency graph (whole), graph node | `api/graph` or `areas/<area>/api-graph`; a node shares its type's nid |
 
-Paragraph, bullet and message indexes (`p0`, `li1`, `msg/3`) are positions. Inserting a paragraph or message shifts the ones after it. The engine recovers by searching for each note's saved quote, so this is fine, but prefer appending over inserting in the middle when it's easy.
+Paragraph, bullet and unanchored message indexes (`p0`, `li1`, `msg/3`) are positions; inserting one shifts the rest. The engine recovers by each note's saved quote, but anchored messages never shift. Notes saved on older nids (`issues/…`, `work/…`, `questions/…`, `cause`/`fix`, a numbered message that now has an anchor) resolve to the new ones.
 
 ## Notes export (`.live/notes.json`, or `<plan-id>-notes-<date>.json` from the Notes page)
 

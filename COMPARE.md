@@ -1,74 +1,65 @@
-# Track A (lean pipeline) compared with main @ 7751dc8
+# Next (Track A + Track C) compared with main @ 7751dc8
 
-Tokens are estimated as characters / 4. Before = `main`, after = this branch.
+This branch merges Track A, the lean pipeline (23e053a), with Track C, step anchors and one item model (eac306f). The engine is 3.0.0. Tokens are estimated as characters / 4.
 
-## Instructions the agent loads
+## What the combination adds beyond A and C alone
 
-| file | before (chars ≈ tokens) | after (chars ≈ tokens) |
+- **History is committed.** The server keeps `version`, `updated`, `changed` and `changelog` in `<dir>/history.json`, next to `plan.js`, not in `.live/`. It never rewrites `plan.js`.
+  - The served `plan.js` gets one appended line, `window.PLAN_AUTO`, built from `history.json`. Any other static server falls back to the engine fetching `history.json`. A `file://` page falls back to `PLAN.version` and `rev`.
+  - `history.json` is served with the same token/cookie as every other plan file. An outside edit to it (a `git pull`, `live.mjs log`) hot-reloads open pages.
+  - The server writes it only on a real change, so viewing a plan adds no file. The first write seeds the changelog from `PLAN.changelog`. A fresh clone (no `.live/`) takes its version and tags from `history.json`.
+- **Server-side diffing understands items and anchors.** Every item list is keyed `areas/<a>/items/<id>`, whether it's `items` or a legacy list.
+  - Items are fingerprinted as the engine reads them: `cause`/`fix`/`text` → `why`/`how`/`title`, and old status words map to the new ones.
+  - Steps are fingerprinted as the message they point at, and flows without their `%% @name` lines.
+  - Result: running `migrate-plan.mjs` under a live server tags **nothing**. That holds on both real plans and the fixtures. Inserting a message tags only the flow; anchored items stay untagged.
+- **Lint plus anchors.** `check.mjs` keeps A's module shape and static Mermaid lint, and adds C's item model and anchor validation. `%% @name` lines are comments to the lint. Unknown, duplicate and malformed anchors are errors; misplaced anchors and numeric steps in anchored flows are warnings. The live listener reports all of them on each edit.
+- **Slim notes keep anchor nids.** For example `…/msg/@append-op`; the live test covers this.
+
+## Numbers
+
+| | main | next |
 |---|---|---|
-| `SKILL.md` | 16,911 ≈ **4,228** | 5,913 ≈ **1,478** |
-| `reference/content.md` (new: kind, issues, work, API, writing rules, moved from SKILL.md) | n/a | 9,794 ≈ 2,449 |
-| `reference/diagrams.md` (+ lint and "which check when") | 2,611 ≈ 653 | 4,110 ≈ 1,028 |
-| `reference/live.md` (+ stream, batching, bookkeeping, notes file, offline fallback) | 6,053 ≈ 1,513 | 11,053 ≈ 2,763 |
-| `reference/schema.md` | 9,614 ≈ 2,404 | 9,825 ≈ 2,456 |
-| **SKILL.md + all references** | 35,189 ≈ **8,797** | 40,695 ≈ **10,174** |
+| `SKILL.md` | 16,911 chars ≈ **4,228** tok | 6,169 ≈ **1,542** tok (−64%) |
+| references | diagrams 653 + live 1,513 + schema 2,404 = 4,570 | content 2,520 + diagrams 1,102 + live 3,146 + schema 2,371 = 9,139 |
+| SKILL + all references | 35,189 ≈ 8,797 | 42,723 ≈ 10,681 |
+| live note loop reads | SKILL, plus schema "before writing plan.js": ≈ 6,632 | SKILL only: **≈ 1,542** (−77%) |
+| seeding a plan reads | SKILL + schema + diagrams ≈ 7,285 | SKILL + content + diagrams ≈ 5,164 (−29%) |
+| 3 notes saved within 2 s (review example) | 3 events, 1,913 B ≈ 478 tok | **1 event**, 1,063 B ≈ 263 tok (−45%) |
+| a single note (element / text / message) | 735 / 671 / 507 B | 451 / 521 / 386 B |
+| tool calls per 3-note round (each note changes the plan) | ≈ 12 (3 edits + 5 bookkeeping + verify + 3 replies) | **4** (3 edits + 1 `replies`) |
+| concepts to learn for pinned items (shapes + field slots + enum values + anchor syntax) | 59 | **39** (−34%) |
+| re-pinned items after inserting one message at the top of every flow | examples 9/9, phase4 41/41, mix 4/4 (numeric steps) | **0** after migration (anchored) |
 
-What a session actually reads:
+The total reference size grew, because new features are documented: lint, bookkeeping, `history.json`, batching, `replies`, `log`, items, anchors and migration. What a session actually loads shrank. Next's events are about 75 B larger than Track A's 987 B: anchor nids and item titles in `where` are longer than `msg/3`.
 
-| session | before | after |
-|---|---|---|
-| live note loop (most sessions) | SKILL.md, which told the agent to read schema.md "before writing plan.js": ≈ 6,632 | SKILL.md only: **≈ 1,478** (−78%) |
-| seed a new plan | SKILL + schema + diagrams: ≈ 7,285 | SKILL + content + diagrams: ≈ 4,955; schema.md (+2,456) only when unsure of a field |
-| offline `*-notes-*.json` | SKILL.md: ≈ 4,228 | SKILL + live.md: ≈ 4,241 |
+## Real plans (copies only; originals byte-identical afterwards)
 
-The total grew by about 1,400 tokens because the new features (lint, bookkeeping, batching, `replies`, `log`) are documented. No rule was deleted; everything removed from SKILL.md now lives in a reference file, and SKILL.md says when to read each one.
-
-## Note events
-
-Measured by running main's `live.mjs` and this branch's on the same three asks against `examples/review` (paths normalized to `~/.claude/skills/plan-explorer` and `~/Code/app/Docs/offline-sync-plan`):
-
-| note | before | after |
-|---|---|---|
-| element note on a summary paragraph (`?`) | 735 B ≈ 182 tok | 451 B ≈ 111 tok |
-| text selection in an issue's cause (`!`) | 671 B ≈ 166 tok | 514 B ≈ 127 tok |
-| plain note on a diagram message | 507 B ≈ 126 tok | 317 B ≈ 79 tok |
-| **all three, saved within 2 s** | 3 lines, 1,913 B ≈ 478 tok, **3 Monitor events** | **1 line**, 987 B ≈ 244 tok, **1 Monitor event** (−48%) |
-
-Dropped: `at`, `markName`, `kind`, `plan`, `planVersion`, `planFile`, null and empty fields, and the `target` of element notes (the quote already is its first 160 characters). Text notes keep `target`, cut to 200 characters (it was up to 4,000). In a batch, one `replies` command replaces the per-note `reply` commands (≈ 120 B each). The examples have short paragraphs; on a 1,500-character paragraph an element note drops from about 2.3 KB (≈ 570 tok) to about 0.5 KB (≈ 120 tok). The full ask stays in `.live/asks.jsonl`.
-
-## Agent work per note round
-
-A burst of 3 notes, each of which changes the plan, in a session's first round:
-
-| step | before | after |
-|---|---|---|
-| Monitor events / agent turns | 3 | 1 (batched) |
-| content edits to `plan.js` | 3 | 3 |
-| bump `version` and `updated` | 1 edit | 0 (server) |
-| set `rev` on each changed item | 3 edits (or 3 extra fields folded into the content edits) | 0 (server diffs ids) |
-| append a changelog entry | 1 edit | 0 (optional `live.mjs log`) |
-| check the edit | `verify.sh` (a headless Chrome run, sandbox off) after structural edits; otherwise nothing | nothing: the listener lints each edit and prints a line only on failure. `verify.sh` only after structural diagram changes |
-| reply commands | 3 | 1 (`replies`) |
-| **tool calls** | **≈ 12** (3 content + 5 bookkeeping + 1 verify + 3 replies) | **4** (3 content + 1 replies) |
-
-A single note: before ≈ 1 content edit + up to 3 bookkeeping edits + verify + 1 reply; after, 1 content edit + 1 reply.
-
-## Trade-offs and risks
-
-- **Latency.** Every note waits up to 2 s in the listener before the agent sees it. That's the price of batching (`PLAN_EXPLORER_BATCH_MS`).
-- **Rounds are a heuristic.** A new version starts after a 30-minute quiet gap. One long sitting accumulates all its changes under one version, and a short break splits a logical round in two. A hand-set higher `plan.version` still wins.
-- **History lives in `.live/`**, which is git-ignored. A committed `plan.js` no longer carries `version` or `changelog` unless the agent writes them. `log` output and the revision snapshot don't travel with the repo. A file:// copy shows the plan's own `version` and `rev` tags, not the server's.
-- **The server runs `plan.js`** in a `vm` context on every save, to fingerprint items. That's the same trust level as `check.mjs` had (agent-written code), with a 1 s timeout, but it now happens automatically. `vm` isn't a security boundary. Served `plan.js` gets one appended line (`window.PLAN_AUTO = …`). HTTP auth, Host/Origin guards and CSP are unchanged.
-- **The static lint is heuristic.** It was calibrated on the engine's pinned Mermaid: every Mermaid failure in the test set is caught, and valid syntax passes. It flags undeclared participants as errors even though Mermaid would draw them implicitly. Exotic syntax (quoted participant names, unusual block options) may need `verify.sh`. Non-sequence diagrams aren't linted.
-- **Lint events can be transient.** If the agent pauses for more than 3 s mid-way through a multi-step edit, it may see a `check` failure followed by `ok:true`.
-- **Less context in events.** Element notes no longer carry the element text past 160 characters. The agent reads `plan.js` by `nid`, which it does anyway to edit.
-- **Batched notes carry no per-note `reply` command.** The agent uses `replies` (with `--status working` for slow work), or builds a `reply` command from the documented form.
+| plan | old shape: check | migrated: check | render (old vs migrated) | `verify.sh` migrated | live: migrate under the server |
+|---|---|---|---|---|---|
+| phase4-review-plan | ✓ (1 warning: old lists) | ✓, 0 warnings | identical: 116 views, 324 step dots, 304 rows | 25/25 flows | `PLAN_AUTO` stays `null`, no `history.json` |
+| mix-unlocks-plan | ✓ (2 lint warnings + old lists) | ✓ (2 lint warnings: raw `<`/`>`) | identical: 45 views, 28 dots, 56 rows | 9/9 flows | `PLAN_AUTO` stays `null` |
 
 ## Rendered site
 
-The screenshots of `#explore`, `#api` and the first area page for `examples/plan` and `examples/review` (file:// copy, 1400×1000, `--virtual-time-budget=8000`) are **byte-identical** to main's: `compare/A-lean/*.png`. Only live pages differ. Changed tags and the sidebar version come from the server when the plan doesn't set them.
+Screenshots were taken of `#explore`, `#api` and `#explore/<first area>` for both examples: a `file://` copy at 1400×1000, `--hide-scrollbars`, `--virtual-time-budget=8000`. They are in `scratchpad/compare/next/`. All six are **byte-identical** to `compare/main/` and to `compare/C-anchors/`.
 
 ## Tests
 
-- `tests/run-engine-test.sh`: 130 PASS. That's 38 new static-lint cases (`tests/check-test.mjs`), a new `rev` back-compat check, and 7 new `PLAN_AUTO` engine checks (`tests/auto-test.js`).
-- `tests/live-test.sh`: 69 PASS. New checks cover slim notes, the `PLAN_AUTO` baseline, the server-side diff, rounds after a gap, bookkeeping-only edits, `log`, batching, `replies`, and lint events.
+- `tests/run-engine-test.sh`: **213 PASS**.
+  - 50 lint and anchor cases in `check-test.mjs`.
+  - Interactions, anchors, legacy compatibility, and `PLAN_AUTO` tags on both the item-shaped plan and the legacy plan.
+  - `history-test.js`: the engine fetches `history.json`.
+- `tests/live-test.sh`: **85 PASS**.
+  - `history.json`: written next to `plan.js` with mode 0644; auth; the changelog seed; `log`; `status`.
+  - An outside `history.json` edit fires a reload event and changes the served `PLAN_AUTO`.
+  - Migration tags nothing; an inserted message tags only the flow; the slim note keeps its anchor nid.
+- `tests/migrate-test.sh`: **8 PASS** on the fixtures, and 8 PASS on copies of the two real plans.
+
+## Trade-offs and risks
+
+- **`history.json` is a second file the user commits.** If it's forgotten, a clone loses its version and tags, but still renders from `PLAN.version`.
+  - The fingerprint snapshot (`.live/revs.json`) stays local. Edits made while no server runs are diffed against the last local snapshot. On a fresh clone they become the baseline, so they aren't tagged.
+- **`log` and the server can both write `history.json`.** Each one reads the file just before its atomic write, so a lost entry needs two writes within milliseconds.
+- **A `file://` page never sees `history.json`.** Chrome blocks `fetch` from `file://`, and the failed fetch is silent. It behaves like main.
+- **Step fingerprints resolve to message text.** Editing the text of a message that an item is pinned to tags that item as well as the flow. That's intended: the item now points at something different.
+- A's and C's other risks still apply: 2 s batching latency, heuristic rounds, a heuristic lint, anchors as a permanent namespace, and migration dropping inner comments.

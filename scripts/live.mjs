@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Plan Explorer live server: serves a plan folder (just plan.js) with the skill's engine,
+// Plan Explorer live server: serves a plan folder (plan.js, plus the history.json it keeps) with the engine,
 // and relays notes between the page and any coding agent. No dependencies.
 // Protocol: reference/live.md
 //
@@ -17,6 +17,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { parseFlow, itemsOf, ANCHOR_LINE } from "./check.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 // PLAN_EXPLORER_ENGINE overrides the engine (tests inject a harness this way).
@@ -51,7 +52,7 @@ const F = {
   lock: path.join(LIVE, "spawn.lock"),
   listener: path.join(LIVE, "listener.json"),
   revs: path.join(LIVE, "revs.json"),
-  changelog: path.join(LIVE, "changelog.json"),
+  history: path.join(DIR, "history.json"),
   plan: path.join(DIR, "plan.js")
 };
 const LISTENER_FRESH_MS = 15000;
@@ -67,7 +68,7 @@ const IDLE_MS = 6 * 60 * 60 * 1000;
 const shq = v => `'${String(v).replace(/'/g, "'\\''")}'`;
 const NOTE_ID = /^[A-Za-z0-9_-]{1,64}$/;
 // A running server is replaced when this script or the engine changes.
-const codeStamp = () => [SELF, ENGINE].map(f => {
+const codeStamp = () => [SELF, ENGINE, path.join(path.dirname(SELF), "check.mjs")].map(f => {
   try {
     return fs.statSync(f).mtimeMs;
   } catch (e) {
@@ -144,6 +145,9 @@ function preferredPort() {
 }
 
 // ── bookkeeping: version, updated and "Changed" tags without the agent ──
+// The server diffs plan.js against a snapshot (.live/revs.json, a local cache) and keeps the result in
+// <dir>/history.json, a small file committed with the plan: { version, updated, changed: [key], changelog: [] }.
+// It never rewrites plan.js.
 // Runs plan.js in an empty context and returns window.PLAN (null if it doesn't run yet, e.g. mid-write).
 function evalPlan(src) {
   try {
@@ -158,18 +162,61 @@ function evalPlan(src) {
 const BOOKKEEPING = new Set(["rev", "version", "updated", "changelog", "replies"]);
 const digest = v => crypto.createHash("sha1").update(JSON.stringify(v, (k, x) => (BOOKKEEPING.has(k) ? undefined : x)) ?? "").digest("base64url").slice(0, 16);
 const without = (o, keys) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => !keys.includes(k)));
-// One fingerprint per item the page can tag, keyed like the engine's nids (areas/<a>/flows/<f>, api/<t>/m/<m>, …).
-// Containers are hashed without their children, so a changed flow doesn't tag its whole area.
-const AREA_KIDS = { flows: "flows", issues: "issues", work: "work", sections: "sections", options: "options", openQuestions: "questions" };
+// Bumped when fingerprints change shape, so an old snapshot isn't diffed against new keys.
+const REVS_FORMAT = 2;
+const ITEM_FIELDS = ["items", "issues", "work", "openQuestions"];
+const AREA_KIDS = ["flows", "sections", "options", ...ITEM_FIELDS];
+const stripAnchors = src => String(src || "").split("\n").filter(l => !ANCHOR_LINE.test(l.trim())).join("\n");
+// The message a step points at, so a step written as a number or as an anchor fingerprints the same.
+function messageAt(parsed, step) {
+  let k = -1;
+  if (typeof step === "string" && !/^\d+$/.test(step)) {
+    const hit = parsed.anchors[step.replace(/^@/, "")];
+    k = hit == null ? -1 : hit;
+  } else {
+    k = Number(step) - 1;
+  }
+  return parsed.msgs[k] ?? `?${step}`;
+}
+// An item as the engine reads it: legacy lists, field names (cause/fix/text) and status words, and numeric
+// vs anchored steps don't count as changes, so migrate-plan.mjs leaves no "Changed" tags behind.
+function itemShape(it, area, parsedFlows) {
+  const raw = it.raw;
+  const shape = without(raw, ["cause", "fix", "text", "type", "status", "title", "why", "how", "steps", "flow"]);
+  shape.type = it.type;
+  shape.status = raw.status == null && it.type === "question" && raw.answer ? "done" : it.status;
+  shape.title = it.title;
+  shape.why = raw.why ?? raw.cause;
+  shape.how = raw.how ?? raw.fix;
+  const flowId = raw.flow ? String(raw.flow).replace(`${area.id}/`, "") : undefined;
+  shape.flow = flowId;
+  const parsed = flowId && parsedFlows.get(flowId);
+  if (Array.isArray(raw.steps)) {
+    shape.steps = parsed ? raw.steps.map(s => messageAt(parsed, s)) : raw.steps;
+  }
+  return shape;
+}
+// One fingerprint per thing the page can tag, keyed like the engine's nids (areas/<a>/flows/<f>,
+// areas/<a>/items/<id>, api/<t>/m/<m>, …). Containers are hashed without their children.
 function fingerprints(plan) {
   const out = {};
   const list = v => (Array.isArray(v) ? v.filter(x => x && typeof x === "object" && x.id != null) : []);
   out.plan = digest(without(plan, ["areas", "api", "roadmap"]));
   for (const a of list(plan.areas)) {
-    out[`areas/${a.id}`] = digest(without(a, Object.keys(AREA_KIDS)));
-    for (const [field, seg] of Object.entries(AREA_KIDS)) {
+    out[`areas/${a.id}`] = digest(without(a, AREA_KIDS));
+    const parsedFlows = new Map();
+    for (const f of list(a.flows)) {
+      parsedFlows.set(String(f.id), parseFlow(f.mermaid));
+      out[`areas/${a.id}/flows/${f.id}`] = digest({ ...f, mermaid: stripAnchors(f.mermaid) });
+    }
+    for (const field of ["sections", "options"]) {
       for (const o of list(a[field])) {
-        out[`areas/${a.id}/${seg}/${o.id}`] = digest(o);
+        out[`areas/${a.id}/${field}/${o.id}`] = digest(o);
+      }
+    }
+    for (const it of itemsOf(a, plan.kind)) {
+      if (it.raw.id != null) {
+        out[`areas/${a.id}/items/${it.raw.id}`] = digest(itemShape(it, a, parsedFlows));
       }
     }
   }
@@ -190,21 +237,29 @@ const today = (t = Date.now()) => {
   const d = new Date(t);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
-// Diffs the plan against the last snapshot (.live/revs.json). The first snapshot is the baseline: nothing is tagged.
-// A change after a quiet gap of ROUND_GAP_MS opens a new round (version + 1); a higher plan.version set by hand wins.
-function trackRevisions(plan, prev, now = Date.now()) {
+const numberOr = (v, fallback) => (Number.isFinite(Number(v)) && v !== null && v !== "" ? Number(v) : fallback);
+// Diffs the plan against the last snapshot. With no snapshot, the plan is the baseline: nothing is tagged,
+// except what history.json already lists for its version (a fresh clone keeps its tags).
+// A change after a quiet gap of ROUND_GAP_MS opens a new round (version + 1). A higher plan.version or
+// history.json version wins.
+function trackRevisions(plan, prev, history, now = Date.now()) {
   const hashes = fingerprints(plan);
-  const own = Number.isFinite(Number(plan.version)) ? Number(plan.version) : 0;
+  const floor = Math.max(numberOr(plan.version, 0), numberOr(history && history.version, 0));
   if (!prev || !prev.hashes) {
-    return { hashes, revs: {}, round: Math.max(own, 1), lastChange: 0, updated: null };
+    const round = Math.max(floor, 1);
+    const revs = {};
+    for (const k of (history && Number(history.version) === round && history.changed) || []) {
+      revs[k] = round;
+    }
+    return { format: REVS_FORMAT, hashes, revs, round, lastChange: 0, updated: (history && history.updated) || null };
   }
   const changed = Object.keys(hashes).filter(k => hashes[k] !== prev.hashes[k]);
   const gone = Object.keys(prev.hashes).filter(k => !(k in hashes));
   if (!changed.length && !gone.length) {
-    return own > prev.round ? { ...prev, round: own } : prev;
+    return floor > prev.round ? { ...prev, round: floor } : prev;
   }
   const fresh = !prev.lastChange || now - prev.lastChange > ROUND_GAP_MS;
-  const round = Math.max(fresh ? prev.round + 1 : prev.round, own);
+  const round = Math.max(fresh ? prev.round + 1 : prev.round, floor);
   const revs = { ...prev.revs };
   for (const k of gone) {
     delete revs[k];
@@ -212,16 +267,45 @@ function trackRevisions(plan, prev, now = Date.now()) {
   for (const k of changed) {
     revs[k] = round;
   }
-  return { hashes, revs, round, lastChange: now, updated: today(now) };
+  return { format: REVS_FORMAT, hashes, revs, round, lastChange: now, updated: today(now) };
 }
-// What the page needs, appended to the served plan.js as window.PLAN_AUTO.
-function autoInfo(state) {
-  if (!state) {
+const changedNow = state => Object.keys(state.revs).filter(k => state.revs[k] === state.round).sort();
+
+// history.json: committed next to plan.js, so the version, date, tags and changelog travel with the plan.
+function readHistory() {
+  const h = readJson(F.history, null);
+  return h && typeof h === "object" && !Array.isArray(h) ? h : null;
+}
+function writeHistory(h) {
+  const body = `${JSON.stringify(h, null, 2)}\n`;
+  try {
+    if (fs.readFileSync(F.history, "utf8") === body) {
+      return false;
+    }
+  } catch (e) {
+    // no history yet
+  }
+  const tmp = `${F.history}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, body, { mode: 0o644 });
+  fs.renameSync(tmp, F.history);
+  return true;
+}
+// The history for a bookkeeping state. The changelog is kept from disk (or seeded from PLAN.changelog).
+function historyFor(state, plan) {
+  const old = readHistory();
+  let changelog = old && Array.isArray(old.changelog) ? old.changelog : null;
+  if (!changelog) {
+    changelog = plan && Array.isArray(plan.changelog) ? plan.changelog : [];
+  }
+  return { version: state.round, updated: state.updated || (old && old.updated) || today(), changed: changedNow(state), changelog };
+}
+// What the page needs from history.json, appended to the served plan.js as window.PLAN_AUTO.
+function autoInfo(history) {
+  if (!history) {
     return null;
   }
-  return { version: state.round, updated: state.updated, changed: Object.keys(state.revs).filter(k => state.revs[k] === state.round) };
+  return { version: history.version ?? null, updated: history.updated ?? null, changed: Array.isArray(history.changed) ? history.changed : [] };
 }
-
 // ── serve ───────────────────────────────────────────────────────────────
 function serve() {
   if (!fs.existsSync(F.plan)) {
@@ -267,7 +351,11 @@ function serve() {
   }
 
   // Bookkeeping state, recomputed whenever plan.js has new content that runs.
+  // A snapshot from another fingerprint format is dropped: the plan becomes the baseline again.
   let revState = readJson(F.revs, null);
+  if (revState && revState.format !== REVS_FORMAT) {
+    revState = null;
+  }
   let revSource = null;
   function refreshRevisions() {
     let src;
@@ -284,21 +372,45 @@ function serve() {
       return;
     }
     revSource = src;
-    const next = trackRevisions(plan, revState);
-    if (next !== revState) {
-      revState = next;
-      writeJson(F.revs, revState);
+    const next = trackRevisions(plan, revState, readHistory());
+    if (next === revState) {
+      return;
+    }
+    const baseline = !revState;
+    revState = next;
+    writeJson(F.revs, revState);
+    // Only a real change (or a raised version) writes history.json; viewing a plan never adds a file.
+    if (!baseline || fs.existsSync(F.history)) {
+      if (writeHistory(historyFor(revState, plan))) {
+        historyMtime = mtimeOf(F.history);
+      }
     }
   }
+  const mtimeOf = file => {
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch (e) {
+      return 0;
+    }
+  };
+  let historyMtime = mtimeOf(F.history);
   refreshRevisions();
 
   // Poll mtimes: fs.watch misses edits on macOS when editors replace the file.
-  let planMtime = fs.statSync(F.plan).mtimeMs;
+  // The page reloads on plan.js edits and on history.json edits the server didn't make (git pull, `log`).
+  let planMtime = mtimeOf(F.plan);
+  const contentStamp = () => Math.max(planMtime, historyMtime);
   fs.watchFile(F.plan, { interval: 300 }, cur => {
     if (cur.mtimeMs && cur.mtimeMs !== planMtime) {
       planMtime = cur.mtimeMs;
       refreshRevisions();
-      broadcast("plan", { mtime: planMtime });
+      broadcast("plan", { mtime: contentStamp() });
+    }
+  });
+  fs.watchFile(F.history, { interval: 300 }, cur => {
+    if (cur.mtimeMs !== historyMtime) {
+      historyMtime = cur.mtimeMs;
+      broadcast("plan", { mtime: contentStamp() });
     }
   });
   fs.watchFile(ENGINE, { interval: 1000 }, () => broadcast("engine", {}));
@@ -358,14 +470,15 @@ function serve() {
       res.end(req.method === "HEAD" ? undefined : buf);
     });
   }
-  // plan.js plus the bookkeeping the agent no longer writes by hand (read by the engine's applyAuto).
+  // plan.js plus history.json's bookkeeping, so the page needs no second request (read by the engine's applyAuto).
+  // null (no history yet) tells the engine to use PLAN.version and rev.
   function servePlan(req, res) {
     fs.readFile(F.plan, "utf8", (e, src) => {
       if (e) {
         return json(res, 404, { error: "not found" });
       }
       refreshRevisions();
-      const body = `${src}\n;window.PLAN_AUTO = ${JSON.stringify(autoInfo(revState))};\n`;
+      const body = `${src}\n;window.PLAN_AUTO = ${JSON.stringify(autoInfo(readHistory()))};\n`;
       res.writeHead(200, { "content-type": TYPES[".js"], "cache-control": "no-store", ...SECURITY });
       res.end(req.method === "HEAD" ? undefined : body);
     });
@@ -439,7 +552,7 @@ function serve() {
     try {
       const route = `${req.method} ${url.pathname}`;
       if (route === "GET /live/hello") {
-        return json(res, 200, { ok: true, pid: process.pid, stamp, planMtime, ...statusNow(), answers: readJson(F.answers, {}), notes: readJson(F.notesRaw, []), deleted: readJson(F.deleted, {}) });
+        return json(res, 200, { ok: true, pid: process.pid, stamp, planMtime: contentStamp(), ...statusNow(), answers: readJson(F.answers, {}), notes: readJson(F.notesRaw, []), deleted: readJson(F.deleted, {}) });
       }
       if (route === "POST /live/stop") {
         json(res, 200, { ok: true });
@@ -952,27 +1065,27 @@ async function replies() {
   process.exit(failed ? 1 : 0);
 }
 
-// Optional changelog: one entry for the current round, kept in .live/changelog.json with the ids that changed.
+// Optional changelog: one entry for the current round, with the ids that changed, kept in history.json.
 function logCmd() {
   const what = rest.join(" ").trim();
   if (!what) {
     console.error(USAGE);
     process.exit(2);
   }
-  ensureLiveDir();
   const state = readJson(F.revs, null);
-  const info = autoInfo(state) || { version: null, changed: [] };
-  const entries = readJson(F.changelog, []);
+  const history = readHistory() || (state ? historyFor(state, evalPlan(fs.readFileSync(F.plan, "utf8"))) : { version: 1, updated: today(), changed: [], changelog: [] });
+  const info = autoInfo(history);
+  const entries = Array.isArray(history.changelog) ? [...history.changelog] : [];
   entries.push({ version: info.version, date: today(), what, changed: info.changed });
-  writeJson(F.changelog, entries);
-  console.log(`✓ logged v${info.version ?? "?"}: ${what}`);
+  writeHistory({ ...history, changelog: entries });
+  console.log(`✓ logged v${info.version ?? "?"} in ${F.history}: ${what}`);
 }
 
 async function status() {
   const s = readJson(F.server, null);
   const running = !!(await health(s));
   const l = listenerState();
-  const info = autoInfo(readJson(F.revs, null));
+  const info = autoInfo(readHistory());
   console.log(JSON.stringify({ running, url: running ? s.url : null, open: running ? s.first : null, agent: l ? l.mode : "offline", version: info ? info.version : null, changed: info ? info.changed : [], pending: pendingAsks().map(a => ({ noteId: a.noteId, text: a.text, where: a.where })) }, null, 2));
 }
 

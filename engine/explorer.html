@@ -149,12 +149,6 @@ h1 { font-size: clamp(40px, 6vw, 76px); line-height: .98; letter-spacing: -.045e
 .sg { font-weight: 700; color: var(--ink-3); }
 .pros .sg { color: var(--m-y); }
 .cons .sg { color: var(--accent); }
-.qs { list-style: none; margin: 0; padding: 0; }
-.qs > li { display: grid; grid-template-columns: 44px 1fr; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); }
-.qn { font: 700 13px/1.7 var(--sans); color: var(--accent); }
-.qt { font-size: 18px; letter-spacing: -.01em; line-height: 1.35; }
-.qa { margin-top: 8px; font-size: 15px; color: var(--ink-2); }
-.qa .kicker { display: inline-flex; margin-right: 8px; }
 
 /* ── buttons ─────────────────────────────────────────── */
 .btn { font: 700 11px var(--sans); letter-spacing: .1em; text-transform: uppercase; padding: 9px 12px; border: 1px solid var(--rule); background: transparent; color: var(--ink); cursor: pointer; text-align: center; }
@@ -210,6 +204,8 @@ h1 { font-size: clamp(40px, 6vw, 76px); line-height: .98; letter-spacing: -.045e
 .ty-remove { --sev: var(--ink-3); --sev-bg: var(--panel); }
 .ty-decision { --sev: var(--ink-2); --sev-bg: var(--panel); }
 .ty-risk { --sev: var(--ty-risk); --sev-bg: var(--ty-risk-bg); }
+.ty-question { --sev: var(--accent); --sev-bg: var(--panel); }
+.ty-question .idot, .ty-question.sevpill::before, .sevchip.ty-question .idot { border-radius: 2px; }
 .ty-risk .idot, .ty-risk.sevpill::before, .sevchip.ty-risk .idot { background: transparent !important; box-shadow: inset 0 0 0 2px var(--sev); }
 svg .stepdot.ty-risk circle { fill: var(--bg); stroke: var(--sev); stroke-width: 2.5px; }
 .ty-remove .it { text-decoration: line-through; text-decoration-color: var(--ink-3); }
@@ -231,9 +227,9 @@ svg .stepdot.ty-risk circle { fill: var(--bg); stroke: var(--sev); stroke-width:
 .issue-rel { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--ink-3); }
 .issue-rel a { font-size: 12px; text-decoration: none; border: 1px solid var(--rule-soft); padding: 1px 7px; color: var(--ink-2); }
 .issue-rel a:hover { border-color: var(--ink-3); color: var(--ink); }
-.issue.st-fixed, .issue.st-wontfix, .issue.st-done, .issue.st-dropped { opacity: .62; }
+.issue.st-fixed, .issue.st-wontfix, .issue.st-done, .issue.st-dropped, .issue.st-answered { opacity: .62; }
 .istatus { font-size: 12px; color: var(--ink-3); }
-.istatus.fixed, .istatus.done { color: var(--m-y); }
+.istatus.fixed, .istatus.done, .istatus.answered { color: var(--m-y); }
 .istatus.doing { color: var(--accent); }
 .sevbar { display: flex; gap: 6px; margin: 8px 0 0; flex-wrap: wrap; }
 
@@ -511,7 +507,7 @@ body.notemode::after { content: ""; position: fixed; inset: 0; border: 3px solid
 <script>
 (() => {
 "use strict";
-const ENGINE_VERSION = "2.5.0";
+const ENGINE_VERSION = "3.0.0";
 let P = window.PLAN;
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -633,10 +629,14 @@ function md(text, base, label) {
 // ── plan helpers ────────────────────────────────────────────────────────
 const areas = () => P.areas || [];
 const areaById = id => areas().find(a => a.id === id);
-// Live bookkeeping: live.mjs appends window.PLAN_AUTO = { version, updated, changed: [key] } to the plan.js it
-// serves, so the agent never maintains version, updated or rev by hand. A file:// page has none and uses rev.
+// Bookkeeping: the live server keeps { version, updated, changed: [key], changelog } in history.json next to
+// plan.js and appends it to the plan.js it serves as window.PLAN_AUTO, so the agent never maintains version,
+// updated or rev by hand. Without that line (another static server, a copy) the engine fetches history.json;
+// with neither (file://) it falls back to PLAN.version and rev.
 let AUTO = null;
 let autoChanged = new WeakSet();
+// Item lists all share the "items" key segment, so legacy issues/work/openQuestions tag the same way.
+const AUTO_KIDS = { flows: "flows", items: "items", issues: "items", work: "items", openQuestions: "items", sections: "sections", options: "options" };
 function applyAuto() {
   AUTO = window.PLAN_AUTO && typeof window.PLAN_AUTO === "object" ? window.PLAN_AUTO : null;
   autoChanged = new WeakSet();
@@ -645,10 +645,9 @@ function applyAuto() {
   const mark = (o, key) => {
     if (o && typeof o === "object" && keys.has(key)) { autoChanged.add(o); }
   };
-  const kidLists = { flows: "flows", issues: "issues", work: "work", sections: "sections", options: "options", openQuestions: "questions" };
   for (const a of P.areas || []) {
     mark(a, `areas/${a.id}`);
-    for (const [field, seg] of Object.entries(kidLists)) {
+    for (const [field, seg] of Object.entries(AUTO_KIDS)) {
       for (const o of a[field] || []) { mark(o, `areas/${a.id}/${seg}/${o && o.id}`); }
     }
   }
@@ -658,16 +657,31 @@ function applyAuto() {
   }
   for (const s of P.roadmap || []) { mark(s, `roadmap/${s.id}`); }
 }
+// Served without the live server's PLAN_AUTO line: read history.json directly. Fails quietly on file://.
+function loadHistory() {
+  if (window.PLAN_AUTO !== undefined || typeof fetch !== "function") { return; }
+  Promise.resolve()
+    .then(() => fetch("history.json", { cache: "no-store" }))
+    .then(r => (r && r.ok ? r.json() : null))
+    .then(h => {
+      if (!h || typeof h !== "object" || window.PLAN_AUTO !== undefined) { return; }
+      window.PLAN_AUTO = h;
+      applyAuto();
+      render(false, scrollY);
+    })
+    .catch(() => {});
+}
 const planVersion = () => {
   const own = P.version != null ? Number(P.version) : null;
   if (!AUTO || AUTO.version == null) { return P.version; }
   return own != null && own > Number(AUTO.version) ? own : AUTO.version;
 };
 const planUpdated = () => (AUTO && AUTO.updated) || P.updated;
-const isChanged = o => o && (autoChanged.has(o) || (o.rev != null && planVersion() != null && Number(o.rev) === Number(planVersion())));
+// Items are normalized copies; the server's keys point at the raw object in plan.js.
+const isChanged = o => o && (autoChanged.has(o) || (o._raw && autoChanged.has(o._raw)) || (o.rev != null && planVersion() != null && Number(o.rev) === Number(planVersion())));
 const chg = o => (isChanged(o) ? `<span class="tag new">Changed v${esc(planVersion())}</span>` : "");
 function areaChanged(a) {
-  const kids = [...(a.flows || []), ...itemsOf(a), ...(a.sections || []), ...(a.options || []), ...(a.openQuestions || [])];
+  const kids = [...(a.flows || []), ...itemsOf(a), ...(a.sections || []), ...(a.options || [])];
   return isChanged(a) || kids.some(isChanged);
 }
 const statusTag = s => (s ? `<span class="tag st-${esc(s)}">${esc(s)}</span>` : "");
@@ -689,17 +703,18 @@ function statusOf(n) {
 }
 function locate(n) {
   const a = n.anchor || {};
-  const hit = INDEX.get(a.nid);
+  const nid = INDEX.has(a.nid) ? a.nid : canonNid(a.nid);
+  const hit = INDEX.get(nid);
   const q = norm(a.quote);
   if (hit && (!q || hit.text.includes(q) || (a.kind !== "text" && q.includes(hit.text)))) {
-    return { nid: a.nid, state: "ok" };
+    return { nid, state: "ok" };
   }
   if (q.length >= 4) {
     for (const [nid, e] of INDEX) {
       if (e.text.includes(q)) { return { nid, state: "moved" }; }
     }
   }
-  if (hit) { return { nid: a.nid, state: "changed" }; }
+  if (hit) { return { nid, state: "changed" }; }
   return { nid: null, state: "orphaned" };
 }
 const noteById = id => notes.find(n => n.id === id);
@@ -720,40 +735,71 @@ const sevRank = s => {
 const sevClass = s => (SEVERITIES.includes(sevKey(s)) ? `sev-${sevKey(s)}` : "");
 const sevLabel = s => (s ? String(s)[0].toUpperCase() + String(s).slice(1) : "");
 const ORIGIN = { "pre-existing": "Also on base", introduced: "Introduced here" };
-const ISSUE_FIELDS = [["trigger", "When"], ["cause", "Cause"], ["impact", "Impact"], ["fix", "Fix"], ["verify", "Verify"]];
-
-// Items pinned to flows come in two kinds, and the data decides which:
-//   areas[].issues → findings (reviews, audits): severity, origin, open → fixed.
-//   areas[].work   → work (implementation plans): new / change / remove / risk / decision, todo → done.
-// Work never borrows severity colours, so a plan doesn't read like a bug report.
-const WORK_TYPES = ["new", "change", "remove", "risk", "decision"];
-const WORK_LABEL = { new: "New", change: "Change", remove: "Remove", risk: "Risk", decision: "Decision" };
-const WORK_FIELDS = [["why", "Why"], ["how", "How"], ["impact", "Impact"], ["mitigation", "Mitigation"], ["verify", "Done when"]];
-const SRC = new WeakMap();
+// One item model. Everything pinned to a flow is an item in areas[].items:
+//   type   bug | risk | new | change | remove | decision | question
+//   status open → doing → done | dropped
+// A bug is a finding: it takes severity and origin and reads as a review. Every other type reads in
+// neutral tones, so a plan never looks like a bug report. Old shapes are read as aliases:
+//   areas[].issues → bug (status fixing/fixed/wontfix → doing/done/dropped; cause → why, fix → how)
+//   areas[].work → its type (status todo → open)
+//   areas[].openQuestions → question (text → title; answered → done)
+const ITEM_TYPES = ["bug", "risk", "new", "change", "remove", "decision", "question"];
+const TYPE_LABEL = { bug: "Bug", risk: "Risk", new: "New", change: "Change", remove: "Remove", decision: "Decision", question: "Question" };
+// Facet and pill order for the neutral types (bugs are grouped by severity instead).
+const WORK_TYPES = ["new", "change", "remove", "risk", "decision", "question"];
+const STATUS_ALIAS = { todo: "open", fixing: "doing", fixed: "done", wontfix: "dropped" };
+const STATUS_WORD = {
+  bug: { open: "open", doing: "fixing", done: "fixed", dropped: "wontfix" },
+  question: { open: "open", doing: "open", done: "answered", dropped: "dropped" },
+  other: { open: "todo", doing: "doing", done: "done", dropped: "dropped" }
+};
+// Field order and label depend on how the item reads. Keys are the canonical names, which the nids use.
+const BUG_FIELDS = [["trigger", "When"], ["why", "Cause"], ["impact", "Impact"], ["how", "Fix"], ["mitigation", "Mitigation"], ["verify", "Verify"], ["answer", "Answer"]];
+const WORK_FIELDS = [["trigger", "When"], ["why", "Why"], ["how", "How"], ["impact", "Impact"], ["mitigation", "Mitigation"], ["verify", "Done when"], ["answer", "Answer"]];
+const LEGACY_LISTS = { issues: "bug", work: "change", openQuestions: "question" };
+const NORMAL = new WeakMap();
+function defaultType(list) {
+  if (list === "items") {
+    return P.kind === "review" ? "bug" : "change";
+  }
+  return LEGACY_LISTS[list];
+}
+function normItem(raw, list, a) {
+  const hit = NORMAL.get(raw);
+  if (hit && hit._a === a) { return hit; }
+  const type = ITEM_TYPES.includes(raw.type) ? raw.type : defaultType(list);
+  const given = STATUS_ALIAS[raw.status] || raw.status;
+  const status = ["open", "doing", "done", "dropped"].includes(given) ? given : type === "question" && raw.answer ? "done" : "open";
+  const i = { ...raw, type, status, title: raw.title ?? raw.text, why: raw.why ?? raw.cause, how: raw.how ?? raw.fix, _a: a, _raw: raw };
+  NORMAL.set(raw, i);
+  return i;
+}
 function itemsOf(a) {
   const out = [];
-  for (const key of ["issues", "work"]) {
-    for (const i of a[key] || []) {
-      SRC.set(i, key);
-      out.push(i);
+  for (const list of ["items", "issues", "work", "openQuestions"]) {
+    for (const raw of a[list] || []) {
+      if (raw && typeof raw === "object") { out.push(normItem(raw, list, a)); }
     }
   }
   return out;
 }
-const isFinding = i => SRC.get(i) !== "work";
-const workType = i => (WORK_TYPES.includes(i.type) ? i.type : "change");
-const toneOf = i => (isFinding(i) ? sevClass(i.severity) : `ty-${workType(i)}`);
-const tagOf = i => (isFinding(i) ? sevLabel(i.severity) : WORK_LABEL[workType(i)]);
-// Findings sort by severity; work sorts by where it happens in its flow.
-const rankOf = i => (isFinding(i) ? [0, sevRank(i.severity), 0] : [1, Math.min(99, ...(i.steps || [99]).map(Number)), WORK_TYPES.indexOf(workType(i))]);
+const isFinding = i => i.type === "bug";
+const isQuestion = i => i.type === "question";
+// Counts and pills track work and findings; questions are listed but not counted.
+const isCounted = i => !isQuestion(i);
+const toneOf = i => (isFinding(i) ? sevClass(i.severity) : `ty-${i.type}`);
+const tagOf = i => (isFinding(i) ? sevLabel(i.severity) : TYPE_LABEL[i.type]);
+const statusWord = i => (STATUS_WORD[i.type] || STATUS_WORD.other)[i.status] || i.status;
+// Findings sort by severity; everything else by where it happens in its flow.
+const rankOf = i => (isFinding(i) ? [0, sevRank(i.severity), 0] : [1, Math.min(99, ...stepsOf(i).map(k => k + 1)), WORK_TYPES.indexOf(i.type)]);
 const bySev = (x, y) => {
   const p = rankOf(x.i || x);
   const q = rankOf(y.i || y);
   return p[0] - q[0] || p[1] - q[1] || p[2] - q[2];
 };
-const isOpenIssue = i => (isFinding(i) ? !i.status || i.status === "open" || i.status === "fixing" : i.status !== "done" && i.status !== "dropped");
+const isOpenIssue = i => i.status === "open" || i.status === "doing";
 const allIssues = () => areas().flatMap(a => itemsOf(a).map(i => ({ a, i })));
-const issueNid = (a, i) => `areas/${a.id}/${SRC.get(i) || "issues"}/${i.id}`;
+const issueNid = (a, i) => `areas/${a.id}/items/${i.id}`;
 function findIssue(areaId, id) {
   const a = areaById(areaId);
   const i = a && itemsOf(a).find(x => x.id === id);
@@ -761,8 +807,9 @@ function findIssue(areaId, id) {
 }
 // What to call the pinned items, from what the plan actually holds.
 function itemWord(list) {
-  const f = list.some(isFinding);
-  const w = list.some(i => !isFinding(i));
+  const counted = list.filter(isCounted);
+  const f = counted.some(isFinding);
+  const w = counted.some(i => !isFinding(i));
   return f && w ? "Items" : w || (!f && P.kind === "plan") ? "Work" : "Issues";
 }
 const apiTypes = () => (P.api && P.api.types) || [];
@@ -772,14 +819,68 @@ const fileOf = s => String(s || "").replace(/:[\d,\- ]+$/, "");
 const squash = s => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 const has = (q, ...xs) => xs.some(x => x && String(x).toLowerCase().includes(q));
 
+// Parsed sequence diagrams, cached per flow object and source.
+const PARSED = new WeakMap();
+function parsedOf(f) {
+  const src = f.mermaid || "";
+  let c = PARSED.get(f);
+  if (!c || c.src !== src) {
+    c = { src, parsed: parseSeq(src) };
+    PARSED.set(f, c);
+  }
+  return c.parsed;
+}
+// A step is a 1-based message number or an anchor name ("append" or "@append") from a `%% @append`
+// line above the message. Returns the 0-based message index, or -1 when it doesn't resolve.
+function stepIndex(f, s) {
+  const parsed = parsedOf(f);
+  if (typeof s === "string" && !/^\d+$/.test(s)) {
+    const k = parsed.anchors[s.replace(/^@/, "")];
+    return k == null ? -1 : k;
+  }
+  const k = Number(s) - 1;
+  return Number.isInteger(k) && k >= 0 && k < parsed.msgs.length ? k : -1;
+}
 function flowOfIssue(a, i) {
   return (a.flows || []).find(f => i.flow === f.id || i.flow === `${a.id}/${f.id}`) || null;
+}
+// 0-based message indexes an item is pinned to.
+function stepsOf(i) {
+  const f = i._a && flowOfIssue(i._a, i);
+  return f ? (i.steps || []).map(s => stepIndex(f, s)).filter(k => k >= 0) : [];
 }
 function issuesForFlow(a, f) {
   return itemsOf(a).filter(i => flowOfIssue(a, i) === f);
 }
 function issuesAtStep(a, f, k) {
-  return issuesForFlow(a, f).filter(i => (i.steps || []).map(Number).includes(k + 1)).sort(bySev);
+  return issuesForFlow(a, f).filter(i => stepsOf(i).includes(k)).sort(bySev);
+}
+// Message nids prefer the anchor, so notes on a message survive inserts above it.
+const msgNid = (b, m, k) => (m.anchor ? `${b}/msg/@${m.anchor}` : `${b}/msg/${k}`);
+function msgOfNid(nid) {
+  const m = String(nid).match(/^(areas\/[^/]+\/flows\/[^/]+)\/msg\/(@[a-z0-9][a-z0-9-]*|\d+)$/);
+  const f = m && FLOWS.get(m[1]);
+  if (!f || f.kind !== "seq") { return null; }
+  const k = m[2][0] === "@" ? f.parsed.anchors[m[2].slice(1)] : Number(m[2]);
+  return k == null || !f.parsed.msgs[k] ? null : { key: m[1], f, k };
+}
+// Notes saved against older nids still land: issues/work/questions → items, cause/fix → why/how,
+// a numbered message → its anchor.
+function canonNid(nid) {
+  let m = String(nid || "").match(/^areas\/([^/]+)\/(issues|work|questions)\/([^/]+)(\/.*)?$/);
+  if (m) {
+    let rest = m[4] || "";
+    rest = rest.replace(/^\/cause\//, "/why/").replace(/^\/fix\//, "/how/");
+    if (m[2] === "questions" && rest === "/answer") { rest = "/answer/p0"; }
+    return `areas/${m[1]}/items/${m[3]}${rest}`;
+  }
+  m = String(nid || "").match(/^(areas\/[^/]+\/flows\/[^/]+)\/msg\/(\d+)$/);
+  if (m) {
+    const f = FLOWS.get(m[1]);
+    const msg = f && f.kind === "seq" && f.parsed.msgs[Number(m[2])];
+    if (msg && msg.anchor) { return msgNid(m[1], msg, Number(m[2])); }
+  }
+  return nid;
 }
 function typeForActor(f, actor) {
   const explicit = (f.actors || {})[actor.id];
@@ -802,7 +903,7 @@ function flowsForType(t) {
   const out = [];
   for (const a of areas()) {
     for (const f of a.flows || []) {
-      if (parseSeq(f.mermaid || "").actors.some(ac => typeForActor(f, ac) === t)) { out.push({ a, f }); }
+      if (parsedOf(f).actors.some(ac => typeForActor(f, ac) === t)) { out.push({ a, f }); }
     }
   }
   return out;
@@ -830,10 +931,10 @@ function rows(title, items, base) {
 function flowCard(a, f) {
   const b = `areas/${a.id}/flows/${f.id}`;
   const label = `${a.title} › ${f.title}`;
-  const parsed = parseSeq(f.mermaid || "");
+  const parsed = parsedOf(f);
   FLOWS.set(b, { kind: "seq", src: f.mermaid || "", parsed, label, title: f.title, a, f });
   parsed.actors.forEach(ac => reg(`${b}/actor/${ac.id}`, `${label} › ${ac.display}`, ac.display));
-  parsed.msgs.forEach((m, k) => reg(`${b}/msg/${k}`, `${label} › step ${k + 1}: ${m.from} → ${m.to}: ${m.text}`, m.text));
+  parsed.msgs.forEach((m, k) => reg(msgNid(b, m, k), `${label} › step ${k + 1}: ${m.from} → ${m.to}: ${m.text}`, m.text));
   parsed.notes.forEach((t, k) => reg(`${b}/note/${k}`, `${label} › note ${k + 1}`, t.text));
   return `<figure class="flow"${reg(b, `${label} (whole flow)`, f.title)}>
     <div class="flow-head"><h3>${esc(f.title)}</h3><span class="kicker">${chg(f)}</span></div>
@@ -852,13 +953,6 @@ function optionCard(a, o) {
     <div class="pc">${list(o.pros, "pros", "+", "For")}${list(o.cons, "cons", "−", "Against")}</div>
   </div>`;
 }
-function questionItem(a, q, k) {
-  const b = `areas/${a.id}/questions/${q.id}`;
-  return `<li><span class="qn">Q${k + 1}</span><div>
-    <div class="qt"${reg(b, `${a.title} › Q${k + 1}`, plain(q.text))}>${inline(q.text)} ${chg(q)}</div>
-    ${q.answer ? `<div class="qa"${reg(`${b}/answer`, `${a.title} › Q${k + 1} answer`, plain(q.answer))}><span class="kicker">Answer</span>${inline(q.answer)}</div>` : ""}
-  </div></li>`;
-}
 function sectionBlock(a, s) {
   const b = `areas/${a.id}/sections/${s.id}`;
   return `<div class="xsection"><h3${reg(b, `${a.title} › ${s.title}`, s.title)}>${esc(s.title)} ${chg(s)}</h3><div class="prose">${md(s.body, b, `${a.title} › ${s.title}`)}</div></div>`;
@@ -869,8 +963,8 @@ function issueRow(a, i) {
   const label = `${a.title} › ${i.title}`;
   // Rows stay quiet: dot, title, one tag. Files, origin and the rest live in the drawer.
   const meta = isFinding(i)
-    ? [i.category ? esc(i.category) : "", isOpenIssue(i) ? "" : esc(i.status)]
-    : [esc(tagOf(i)), i.status && i.status !== "todo" ? esc(i.status) : ""];
+    ? [i.category ? esc(i.category) : "", isOpenIssue(i) ? "" : esc(statusWord(i))]
+    : [esc(tagOf(i)), i.status !== "open" ? esc(statusWord(i)) : ""];
   return `<button class="irow ${toneOf(i)}${isOpenIssue(i) ? "" : " closed"}" data-open-issue="${esc(a.id)}/${esc(i.id)}"${reg(issueNid(a, i), label, i.title)}>
     <span class="idot"></span><span class="it">${inline(i.title)}</span>
     <span class="im">${meta.filter(Boolean).join(" · ")}</span>${chg(i)}
@@ -880,8 +974,6 @@ function issueRef(id) {
   for (const a of areas()) {
     const hit = itemsOf(a).find(x => x.id === id);
     if (hit) { return `<a href="#" data-open-issue="${esc(a.id)}/${esc(id)}">${esc(trunc(plain(hit.title), 52))}</a>`; }
-    const q = (a.openQuestions || []).find(x => x.id === id);
-    if (q) { return `<a href="#explore/${esc(a.id)}" data-focus-nid="areas/${esc(a.id)}/questions/${esc(id)}">${esc(trunc(plain(q.text), 52))}</a>`; }
   }
   const t = resolveType(id);
   return t ? `<a href="#api/${esc(t.id)}" data-open-type="${esc(t.id)}">${esc(t.name)}</a>` : `<span>${esc(id)}</span>`;
@@ -891,10 +983,11 @@ function issueCard(a, i) {
   const label = `${a.title} › ${i.title}`;
   const where = [].concat(i.where || []);
   const finding = isFinding(i);
-  const status = i.status && i.status !== "open" && i.status !== "todo" ? i.status : "";
+  const status = i.status !== "open" ? statusWord(i) : "";
   const flow = flowOfIssue(a, i);
   const types = typesForIssue(i);
-  const fields = finding ? ISSUE_FIELDS : WORK_FIELDS;
+  const fields = finding ? BUG_FIELDS : WORK_FIELDS;
+  const steps = stepsOf(i).map(k => k + 1);
   return `<div class="issue ${toneOf(i)}${status ? " st-" + esc(status) : ""}">
     <h3 class="issue-title"${reg(b, label, i.title)}>${inline(i.title)}</h3>
     <div class="issue-meta">
@@ -907,8 +1000,8 @@ function issueCard(a, i) {
     ${where.length ? `<div class="where">${where.map(w => `<code>${esc(w)}</code>`).join("")}</div>` : ""}
     ${i.summary ? `<div class="issue-sum">${md(i.summary, `${b}/summary`, `${label} › summary`)}</div>` : ""}
     <dl class="ifields">${fields.filter(([k]) => i[k]).map(([k, word]) =>
-      `<dt class="${k}">${word}</dt><dd>${md(i[k], `${b}/${k}`, `${label} › ${word}`)}</dd>`).join("")}</dl>
-    ${flow ? `<div class="issue-rel"><span>Flow</span><a href="#explore/${esc(a.id)}" data-focus-nid="areas/${esc(a.id)}/flows/${esc(flow.id)}">${esc(flow.title)}${(i.steps || []).length ? ` · step ${i.steps.join(", ")}` : ""}</a></div>` : ""}
+      `<dt class="${finding && k === "how" ? "fix" : k}">${word}</dt><dd>${md(i[k], `${b}/${k}`, `${label} › ${word}`)}</dd>`).join("")}</dl>
+    ${flow ? `<div class="issue-rel"><span>Flow</span><a href="#explore/${esc(a.id)}" data-focus-nid="areas/${esc(a.id)}/flows/${esc(flow.id)}">${esc(flow.title)}${steps.length ? ` · step ${steps.join(", ")}` : ""}</a></div>` : ""}
     ${types.length ? `<div class="issue-rel"><span>Types</span>${types.map(t => `<a href="#api/${esc(t.id)}" data-open-type="${esc(t.id)}">${esc(t.name)}</a>`).join("")}</div>` : ""}
     ${(i.related || []).length ? `<div class="issue-rel"><span>Related</span>${i.related.map(issueRef).join("")}</div>` : ""}
   </div>`;
@@ -919,12 +1012,13 @@ const ex = { q: "", kind: "all", sev: "all", type: "all", cat: "all", status: "o
 const KINDS = [["all", "Everything"], ["flow", "Flows"], ["issue", "Issues"], ["question", "Questions"], ["option", "Options"], ["section", "Write-ups"], ["api", "API"]];
 function issuePass(i, q) {
   return (ex.sev === "all" || (isFinding(i) && sevKey(i.severity) === ex.sev)) &&
-    (ex.type === "all" || (!isFinding(i) && workType(i) === ex.type)) &&
+    (ex.type === "all" || (!isFinding(i) && i.type === ex.type)) &&
     (ex.cat === "all" || i.category === ex.cat) &&
     (ex.status === "all" || (ex.status === "open" ? isOpenIssue(i) : !isOpenIssue(i))) &&
     (ex.origin === "all" || i.origin === ex.origin) &&
-    (!q || has(q, i.title, i.summary, i.category, i.trigger, i.cause, i.impact, i.fix, i.why, i.how, i.mitigation, i.verify, ...[].concat(i.where || [])));
+    (!q || has(q, i.title, i.summary, i.category, i.trigger, i.why, i.impact, i.how, i.mitigation, i.verify, i.answer, ...[].concat(i.where || [])));
 }
+const openCount = a => itemsOf(a).filter(i => isCounted(i) && isOpenIssue(i)).length;
 const issueFilterOn = () => ex.sev !== "all" || ex.type !== "all" || ex.cat !== "all" || ex.origin !== "all";
 function chip(key, value, label, count) {
   return `<button class="chip${ex[key] === value ? " on" : ""}" data-ex="${key}:${esc(value)}">${esc(label)}${count != null ? `<span class="cc">${count}</span>` : ""}</button>`;
@@ -933,7 +1027,8 @@ function viewExplore(areaId) {
   const area = areaId ? areaById(areaId) : null;
   const o = P.overview || {};
   const scope = area ? [area] : areas();
-  const iss = scope.flatMap(a => itemsOf(a).map(i => ({ a, i })));
+  const all = scope.flatMap(a => itemsOf(a).map(i => ({ a, i })));
+  const iss = all.filter(x => isCounted(x.i));
   const finds = iss.filter(x => isFinding(x.i));
   const works = iss.filter(x => !isFinding(x.i));
   const cats = [...new Set(iss.map(x => x.i.category).filter(Boolean))].sort();
@@ -942,11 +1037,11 @@ function viewExplore(areaId) {
   const word = itemWord(iss.map(x => x.i));
   const openLabel = works.length && !finds.length ? "To do" : "Open";
   const closedLabel = finds.length && !works.length ? "Fixed / won't fix" : works.length && !finds.length ? "Done" : "Closed";
-  const types = WORK_TYPES.filter(t => works.some(x => workType(x.i) === t));
+  const types = WORK_TYPES.filter(t => all.some(x => x.i.type === t));
   const pill = (key, label) => `<button class="fpill" data-ex="${key}">${esc(label)}</button>`;
   const active = [
     area ? `<a class="fpill" href="#explore">${esc(area.title)}</a>` : "",
-    ex.type !== "all" ? pill(`type:${ex.type}`, WORK_LABEL[ex.type] || ex.type) : "",
+    ex.type !== "all" ? pill(`type:${ex.type}`, TYPE_LABEL[ex.type] || ex.type) : "",
     ex.sev !== "all" ? pill(`sev:${ex.sev}`, sevLabel(ex.sev)) : "",
     ex.cat !== "all" ? pill(`cat:${ex.cat}`, ex.cat) : "",
     ex.origin !== "all" ? pill(`origin:${ex.origin}`, ORIGIN[ex.origin] || ex.origin) : ""
@@ -968,8 +1063,8 @@ function viewExplore(areaId) {
   </div>
   ${active.length ? `<div class="factive">${active.join("")}</div>` : ""}
   ${ex.panel ? `<div class="fpanel">
-    <span class="kicker">Area</span><div class="fopts"><a class="chip${!area ? " on" : ""}" href="#explore">All</a>${areas().map(a => `<a class="chip${area === a ? " on" : ""}" href="#explore/${esc(a.id)}">${esc(a.title)}${itemsOf(a).filter(isOpenIssue).length ? `<span class="cc">${itemsOf(a).filter(isOpenIssue).length}</span>` : ""}</a>`).join("")}</div>
-    ${types.length ? `<span class="kicker">Type</span><div class="fopts">${types.map(t => `<button class="chip sevchip ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}"><span class="idot"></span>${WORK_LABEL[t]}<span class="cc">${countBy(i => !isFinding(i) && workType(i) === t && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
+    <span class="kicker">Area</span><div class="fopts"><a class="chip${!area ? " on" : ""}" href="#explore">All</a>${areas().map(a => `<a class="chip${area === a ? " on" : ""}" href="#explore/${esc(a.id)}">${esc(a.title)}${openCount(a) ? `<span class="cc">${openCount(a)}</span>` : ""}</a>`).join("")}</div>
+    ${types.length ? `<span class="kicker">Type</span><div class="fopts">${types.map(t => `<button class="chip sevchip ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}"><span class="idot"></span>${TYPE_LABEL[t]}<span class="cc">${all.filter(x => x.i.type === t && isOpenIssue(x.i)).length}</span></button>`).join("")}</div>` : ""}
     ${finds.length ? `<span class="kicker">Severity</span><div class="fopts">${SEVERITIES.map(v => `<button class="chip sevchip ${sevClass(v)}${ex.sev === v ? " on" : ""}" data-ex="sev:${v}"><span class="idot"></span>${sevLabel(v)}<span class="cc">${countBy(i => isFinding(i) && sevKey(i.severity) === v && isOpenIssue(i))}</span></button>`).join("")}</div>` : ""}
     ${cats.length > 1 ? `<span class="kicker">Category</span><div class="fopts">${cats.map(c => chip("cat", c, c, countBy(i => i.category === c && isOpenIssue(i)))).join("")}</div>` : ""}
     ${origins.length ? `<span class="kicker">Origin</span><div class="fopts">${origins.map(v => chip("origin", v, ORIGIN[v] || v, countBy(i => i.origin === v))).join("")}</div>` : ""}
@@ -983,7 +1078,8 @@ function exploreResults(area) {
   const blocks = [];
   for (const a of area ? [area] : areas()) {
     const parts = [];
-    const issues = itemsOf(a).filter(i => issuePass(i, q)).sort(bySev);
+    // Questions are items too; the Questions tab shows only them, the item tab everything else.
+    const issues = itemsOf(a).filter(i => issuePass(i, q) && want(isQuestion(i) ? "question" : "issue")).sort(bySev);
     const shownFlows = [];
     if (want("flow")) {
       for (const f of a.flows || []) {
@@ -993,20 +1089,18 @@ function exploreResults(area) {
       }
     }
     for (const { f, linked } of shownFlows) {
-      parts.push(flowCard(a, f) + (want("issue") && linked.length ? `<div class="irows inflow">${linked.map(i => issueRow(a, i)).join("")}</div>` : ""));
+      parts.push(flowCard(a, f) + (linked.length ? `<div class="irows inflow">${linked.map(i => issueRow(a, i)).join("")}</div>` : ""));
     }
-    if (want("issue")) {
-      const inShown = new Set(shownFlows.flatMap(x => x.linked));
-      const loose = issues.filter(i => !inShown.has(i));
-      if (loose.length) {
-        parts.push(`<div class="irows">${shownFlows.length ? `<div class="kicker">${ex.kind === "issue" ? itemWord(loose) : "Not in a flow"}</div>` : ""}${loose.map(i => issueRow(a, i)).join("")}</div>`);
-      }
+    const inShown = new Set(shownFlows.flatMap(x => x.linked));
+    const loose = issues.filter(i => !inShown.has(i) && !isQuestion(i));
+    if (loose.length) {
+      parts.push(`<div class="irows">${shownFlows.length ? `<div class="kicker">${ex.kind === "issue" ? itemWord(loose) : "Not in a flow"}</div>` : ""}${loose.map(i => issueRow(a, i)).join("")}</div>`);
+    }
+    const looseQs = issues.filter(i => !inShown.has(i) && isQuestion(i));
+    if (looseQs.length) {
+      parts.push(`<div class="irows"><div class="kicker">Questions</div>${looseQs.map(i => issueRow(a, i)).join("")}</div>`);
     }
     if (!strict) {
-      const qs = (a.openQuestions || []).filter(x => !q || has(q, x.text, x.answer));
-      if (want("question") && qs.length) {
-        parts.push(`<div class="xblock"><div class="kicker">Open questions</div><ol class="qs">${qs.map(x => questionItem(a, x, (a.openQuestions || []).indexOf(x))).join("")}</ol></div>`);
-      }
       const opts = (a.options || []).filter(x => !q || has(q, x.title, x.body, ...(x.pros || []), ...(x.cons || [])));
       if (want("option") && opts.length) {
         parts.push(`<div class="xblock"><div class="kicker">Options</div>${opts.map(x => optionCard(a, x)).join("")}</div>`);
@@ -1019,11 +1113,11 @@ function exploreResults(area) {
       }
     }
     if (!parts.length) { continue; }
-    const open = itemsOf(a).filter(isOpenIssue);
+    const open = itemsOf(a).filter(i => isCounted(i) && isOpenIssue(i));
     const pills = SEVERITIES.map(s => [s, open.filter(i => isFinding(i) && sevKey(i.severity) === s).length]).filter(([, n]) => n)
       .map(([s, n]) => `<button class="sevpill ${sevClass(s)}${ex.sev === s ? " on" : ""}" data-ex="sev:${s}">${n} ${s}</button>`).join("") +
-      WORK_TYPES.map(t => [t, open.filter(i => !isFinding(i) && workType(i) === t).length]).filter(([, n]) => n)
-        .map(([t, n]) => `<button class="sevpill ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}">${n} ${WORK_LABEL[t].toLowerCase()}</button>`).join("");
+      WORK_TYPES.map(t => [t, open.filter(i => i.type === t).length]).filter(([, n]) => n)
+        .map(([t, n]) => `<button class="sevpill ty-${t}${ex.type === t ? " on" : ""}" data-ex="type:${t}">${n} ${TYPE_LABEL[t].toLowerCase()}</button>`).join("");
     blocks.push(`<section class="xarea">
       ${area ? (pills ? `<div class="xpills">${pills}</div>` : "") : `<div class="xhead"><a class="xn" href="#explore/${esc(a.id)}">${pad(areas().indexOf(a) + 1)}</a><a class="xt" href="#explore/${esc(a.id)}"${reg(`areas/${a.id}`, a.title, a.title)}>${esc(a.title)}</a><span class="xpills">${statusTag(a.status)}${pills}${chg(a)}</span></div>
       ${a.summary ? `<p class="xsum">${inline(firstPara(a.summary))}</p>` : ""}`}
@@ -1407,7 +1501,7 @@ function renderSide(r) {
   const cur = r.view;
   const item = (href, label, extra, on) => `<a class="nav${on ? " on" : ""}" href="#${esc(href)}"><span>${label}</span>${extra || ""}</a>`;
   const open = notes.filter(n => statusOf(n) === "open").length;
-  const openIssues = allIssues().filter(x => isOpenIssue(x.i)).length;
+  const openIssues = allIssues().filter(x => isCounted(x.i) && isOpenIssue(x.i)).length;
   $("#side").innerHTML = `
     <div class="brand"><span class="sq"></span><span class="kicker">Plan Explorer</span></div>
     <div class="ptitle">${esc(P.title)}</div>
@@ -1438,8 +1532,11 @@ function groupLines(els, items) {
   }
   return out;
 }
+// `%% @name` on its own line names the message right below it (an anchor). Mermaid treats it as a comment.
+const ANCHOR_LINE = /^%%\s*@([a-z0-9][a-z0-9-]*)\s*$/i;
 function parseSeq(src) {
-  const out = { actors: [], msgs: [], notes: [], byDisplay: {} };
+  const out = { actors: [], msgs: [], notes: [], byDisplay: {}, anchors: {} };
+  let anchor = null;
   const seen = new Set();
   const clean = s => norm(String(s).replace(/<br\s*\/?>/gi, " "));
   const add = (id, display) => {
@@ -1453,9 +1550,15 @@ function parseSeq(src) {
   for (const raw of String(src).split("\n")) {
     const l = raw.trim();
     let m;
-    if (l.startsWith("%%")) {
+    if ((m = l.match(ANCHOR_LINE))) {
+      anchor = m[1].toLowerCase();
       continue;
     }
+    if (!l || l.startsWith("%%")) {
+      continue;
+    }
+    const pending = anchor;
+    anchor = null;
     if ((m = l.match(/^(?:create\s+)?(?:participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/i))) {
       add(m[1], m[2]);
     } else if ((m = l.match(/^note\s+(?:left of|right of|over)\s+[^:]+:\s*(.*)$/i))) {
@@ -1463,7 +1566,12 @@ function parseSeq(src) {
     } else if ((m = l.match(/^(.+?)\s*(<<-{1,2}>>|-{1,2}(?:>>|>|x|\)))\s*[+-]?\s*(.+?)\s*:\s*(.*)$/))) {
       add(m[1]);
       add(m[3]);
-      out.msgs.push({ from: m[1].trim(), to: m[3].trim(), text: clean(m[4]), lines: brLines(m[4]) });
+      const msg = { from: m[1].trim(), to: m[3].trim(), text: clean(m[4]), lines: brLines(m[4]) };
+      if (pending && out.anchors[pending] == null) {
+        msg.anchor = pending;
+        out.anchors[pending] = out.msgs.length;
+      }
+      out.msgs.push(msg);
     }
   }
   return out;
@@ -1568,8 +1676,9 @@ function stampSeq(c, b, f) {
     if (INDEX.has(nid)) { el.setAttribute("data-nid", nid); }
   };
   const steps = groupLines($$("text.messageText", c), f.parsed.msgs);
-  steps.forEach((els, k) => els.forEach(el => set(el, `${b}/msg/${k}`)));
-  $$(".messageLine0, .messageLine1", c).forEach((el, k) => set(el, `${b}/msg/${k}`));
+  const nidAt = k => msgNid(b, f.parsed.msgs[k] || {}, k);
+  steps.forEach((els, k) => els.forEach(el => set(el, nidAt(k))));
+  $$(".messageLine0, .messageLine1", c).forEach((el, k) => set(el, nidAt(k)));
   $$("rect.actor[name]", c).forEach(el => set(el, `${b}/actor/${el.getAttribute("name")}`));
   $$("text.actor", c).forEach(el => {
     const d = norm(el.textContent);
@@ -1592,7 +1701,7 @@ function stampSeq(c, b, f) {
     const bb = el.getBBox();
     const g = document.createElementNS(SVGNS, "g");
     g.setAttribute("class", `stepdot ${toneOf(list[0])}`);
-    g.setAttribute("data-nid", `${b}/msg/${k}`);
+    g.setAttribute("data-nid", nidAt(k));
     const r = list.length > 1 ? 7 : 5;
     const cx = bb.x + bb.width + r + 5;
     const cy = bb.y + bb.height / 2;
@@ -1766,16 +1875,14 @@ function tipFor(el) {
   const host = el.closest("[data-nid]");
   if (!host) { return ""; }
   const nid = host.getAttribute("data-nid");
-  let m = nid.match(/^(areas\/[^/]+\/flows\/[^/]+)\/msg\/(\d+)$/);
-  if (m) {
-    const f = FLOWS.get(m[1]);
-    const k = Number(m[2]);
-    const msg = f && f.parsed.msgs[k];
-    if (!msg) { return ""; }
+  const step = msgOfNid(nid);
+  if (step) {
+    const { f, k } = step;
+    const msg = f.parsed.msgs[k];
     const list = f.a ? issuesAtStep(f.a, f.f, k) : [];
     return `<div class="tipk">Step ${k + 1}</div><div class="tipt">${esc(msg.from)} → ${esc(msg.to)}</div><div>${esc(msg.text)}</div>${tipIssues(list)}${list.length ? `<div class="tipm">Click for details</div>` : ""}${noteCountFor(nid)}`;
   }
-  m = nid.match(/^(areas\/[^/]+\/flows\/[^/]+)\/actor\/(.+)$/);
+  const m = nid.match(/^(areas\/[^/]+\/flows\/[^/]+)\/actor\/(.+)$/);
   if (m) {
     const t = host.getAttribute("data-type") && typeById(host.getAttribute("data-type"));
     return t ? typeTip(t) + `<div class="tipm">Click to open</div>${noteCountFor(nid)}` : `<div class="tipt">${esc(norm(host.textContent) || m[2])}</div>${noteCountFor(nid)}`;
@@ -1837,11 +1944,10 @@ function diagramClick(e) {
     return true;
   }
   const host = t.closest("[data-nid]");
-  const m = host && host.getAttribute("data-nid").match(/^(areas\/[^/]+\/flows\/[^/]+)\/msg\/(\d+)$/);
-  if (m) {
-    const f = FLOWS.get(m[1]);
-    const k = Number(m[2]);
-    const list = f && f.a ? issuesAtStep(f.a, f.f, k) : [];
+  const step = host && msgOfNid(host.getAttribute("data-nid"));
+  if (step) {
+    const { f, k } = step;
+    const list = f.a ? issuesAtStep(f.a, f.f, k) : [];
     if (list.length === 1) {
       closeLightbox();
       openDrawer({ kind: "issue", area: f.a.id, id: list[0].id }, false);
@@ -1849,7 +1955,7 @@ function diagramClick(e) {
     }
     if (list.length > 1) {
       closeLightbox();
-      openDrawer({ kind: "step", flow: m[1], k }, false);
+      openDrawer({ kind: "step", flow: step.key, k }, false);
       return true;
     }
   }
@@ -2210,7 +2316,7 @@ function focusNid(nid) {
 }
 function focusPending(final) {
   if (!pendingFocus) { return; }
-  const im = pendingFocus.match(/^areas\/([^/]+)\/(?:issues|work)\/([^/]+)\/./);
+  const im = pendingFocus.match(/^areas\/([^/]+)\/items\/([^/]+)\/./);
   if (im && drawer.hidden) { openDrawer({ kind: "issue", area: im[1], id: im[2] }, false); }
   const el = targetsFor(pendingFocus)[0];
   if (!el) {
@@ -2676,6 +2782,7 @@ const live = (() => {
       const before = planVersion();
       P = window.PLAN;
       applyAuto();
+      loadHistory();
       document.title = P.title || "Plan Explorer";
       INDEX.clear();
       FLOWS.clear();
@@ -2688,7 +2795,7 @@ const live = (() => {
       toast("plan.js failed to load. Keeping the last good version.");
     };
     window.PLAN = null;
-    window.PLAN_AUTO = null;
+    window.PLAN_AUTO = undefined;
     document.head.appendChild(s);
   }
   function connect() {
@@ -2772,7 +2879,7 @@ addEventListener("storage", e => {
 });
 
 // Pure helpers, reachable from the engine tests.
-window.planExplorer = Object.freeze({ version: ENGINE_VERSION, parsePrefix, inline });
+window.planExplorer = Object.freeze({ version: ENGINE_VERSION, parsePrefix, inline, parseSeq, msgIndex: nid => (msgOfNid(nid) || {}).k ?? null });
 
 applyAuto();
 buildIndex();
@@ -2781,6 +2888,7 @@ addEventListener("hashchange", () => render(true));
 addEventListener("resize", schedulePins);
 new ResizeObserver(schedulePins).observe($("#page"));
 render(true);
+loadHistory();
 })();
 </script>
 </body>

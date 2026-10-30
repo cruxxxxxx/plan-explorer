@@ -20,14 +20,77 @@ const PARTICIPANT_ID = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
 // Counts messages the way the engine numbers steps (1-based, skipping %% lines).
 export function messageCount(src) {
-  let n = 0;
+  return parseFlow(src).msgs.length;
+}
+
+// Messages of a sequence diagram in order, with the anchors that `%% @name` lines directly above
+// them give. anchors maps name → 0-based message index. problems: [{ level: "error"|"warning", text }].
+export const ANCHOR_LINE = /^%%\s*@(\S+)\s*$/;
+export function parseFlow(src) {
+  const msgs = [];
+  const anchors = {};
+  const problems = [];
+  const warnAt = text => problems.push({ level: "warning", text });
+  let pending = null;
   for (const line of String(src || "").split("\n")) {
     const t = line.trim();
-    if (!t.startsWith("%%") && MESSAGE.test(t)) {
-      n++;
+    const a = t.match(ANCHOR_LINE);
+    if (a) {
+      if (pending) {
+        warnAt(`anchor @${pending} is not directly above a message`);
+      }
+      pending = a[1];
+      if (!ID.test(pending)) {
+        problems.push({ level: "error", text: `anchor @${pending} must be lowercase kebab-case` });
+      }
+      continue;
+    }
+    if (!t || t.startsWith("%%")) {
+      continue;
+    }
+    if (MESSAGE.test(t)) {
+      if (pending) {
+        if (anchors[pending] != null) {
+          problems.push({ level: "error", text: `anchor @${pending} is used twice` });
+        } else {
+          anchors[pending] = msgs.length;
+        }
+      }
+      msgs.push(t);
+    } else if (pending) {
+      warnAt(`anchor @${pending} is not directly above a message`);
+    }
+    pending = null;
+  }
+  if (pending) {
+    warnAt(`anchor @${pending} is not directly above a message`);
+  }
+  return { msgs, anchors, problems };
+}
+
+// One item model: areas[].items. The old issues / work / openQuestions lists are read as aliases.
+export const ITEM_TYPES = ["bug", "risk", "new", "change", "remove", "decision", "question"];
+export const ITEM_STATUSES = ["open", "doing", "done", "dropped"];
+const LEGACY_STATUS = { todo: "open", fixing: "doing", fixed: "done", wontfix: "dropped" };
+const LEGACY_TYPE = { issues: "bug", work: "change", openQuestions: "question" };
+export const ITEM_LISTS = ["items", "issues", "work", "openQuestions"];
+export function itemsOf(area, kind) {
+  const out = [];
+  for (const list of ITEM_LISTS) {
+    for (const raw of (area && area[list]) || []) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      let type = LEGACY_TYPE[list];
+      if (ITEM_TYPES.includes(raw.type)) {
+        type = raw.type;
+      } else if (list === "items") {
+        type = kind === "review" ? "bug" : "change";
+      }
+      out.push({ raw, list, type, title: raw.title ?? raw.text, status: LEGACY_STATUS[raw.status] || raw.status || "open" });
     }
   }
-  return n;
+  return out;
 }
 
 // Static lint of one sequenceDiagram. Returns { errors, warnings, participants }, each message prefixed "line N".
@@ -223,29 +286,88 @@ export function checkPlan(plan) {
   checkIds(plan.areas, "areas");
   const typeIds = new Set(((plan.api || {}).types || []).map(t => t.id));
 
-  // v2 coupling: issue → flow + steps (1-based message numbers) + api types.
-  function checkIssueLinks(i, ib, a, flowIds) {
-    if (i.flow && !flowIds.has(i.flow)) {
-      err(`${ib}: flow "${i.flow}" is not a flow in area ${a.id}`);
-    }
-    if (i.steps) {
+  // An item sits on a flow and steps: 1-based message numbers or anchor names.
+  function checkLinks(it, ib, a, flows) {
+    const i = it.raw;
+    const f = i.flow ? flows.get(i.flow) || flows.get(String(i.flow).replace(`${a.id}/`, "")) : null;
+    if (i.flow && !f) { err(`${ib}: flow "${i.flow}" is not a flow in area ${a.id}`); }
+    if (i.steps != null && !Array.isArray(i.steps)) { err(`${ib}: steps must be an array`); }
+    if (Array.isArray(i.steps)) {
       if (!i.flow) {
         err(`${ib}: steps given without flow`);
-      } else if (flowIds.has(i.flow)) {
-        const n = messageCount(a.flows.find(f => f.id === i.flow).mermaid);
-        for (const k of i.steps) {
-          if (!Number.isInteger(k) || k < 1 || k > n) { err(`${ib}: step ${k} is outside 1..${n} (messages in ${i.flow})`); }
-        }
+      } else if (f) {
+        checkSteps(i.steps, ib, f);
       }
     }
     for (const t of i.types || []) {
       if (!typeIds.has(t)) { err(`${ib}: types → "${t}" is not an api type id`); }
     }
-    if (!i.flow && (a.flows || []).length && !["fixed", "wontfix", "done", "dropped"].includes(i.status) && i.type !== "remove" && i.type !== "decision") {
+    if (!i.flow && (a.flows || []).length && ["open", "doing"].includes(it.status) && !["remove", "decision", "question"].includes(it.type)) {
       warn(`${ib}: not linked to a flow (add flow + steps so it shows on the diagram)`);
     }
   }
+  function checkSteps(steps, ib, f) {
+    const { msgs, anchors } = f.parsed;
+    const anchored = Object.keys(anchors).length > 0;
+    for (const k of steps) {
+      if (typeof k === "string" && !/^\d+$/.test(k)) {
+        const name = k.replace(/^@/, "");
+        if (anchors[name] == null) {
+          err(`${ib}: step "${k}" is not an anchor in ${f.id} (known: ${Object.keys(anchors).map(x => "@" + x).join(", ") || "none"})`);
+        }
+      } else if (!Number.isInteger(Number(k)) || k < 1 || k > msgs.length) {
+        err(`${ib}: step ${k} is outside 1..${msgs.length} (messages in ${f.id})`);
+      } else if (anchored) {
+        warn(`${ib}: step ${k} is a number in ${f.id}, which has anchors; numbers shift when a message is inserted above. Put \`%% @name\` above that message and use "name"`);
+      }
+    }
+  }
+  function checkFlow(f, b) {
+    const fb = `${b}/flows/${f.id}`;
+    const src = String(f.mermaid || "").trim();
+    const parsed = parseFlow(src);
+    if (!f.title) { err(`${fb}: missing title`); }
+    if (!src) {
+      err(`${fb}: empty mermaid`);
+      return { id: f.id, parsed };
+    }
+    for (const p of parsed.problems) {
+      (p.level === "error" ? err : warn)(`${fb}: ${p.text}`);
+    }
+    const sequence = src.startsWith("sequenceDiagram");
+    if (!sequence) {
+      warn(`${fb}: not a sequenceDiagram; per-message notes only work on sequence diagrams (not linted; run verify.sh)`);
+    }
+    const lint = sequence ? lintSequence(src) : { errors: [], warnings: [], participants: null };
+    lint.errors.forEach(m => err(`${fb} ${m}`));
+    lint.warnings.forEach(m => warn(`${fb} ${m}`));
+    for (const [pid, tid] of Object.entries(f.actors || {})) {
+      if (!typeIds.has(tid)) { err(`${fb}: actors.${pid} → "${tid}" is not an api type id`); }
+      if (lint.participants && !lint.participants.has(pid)) { warn(`${fb}: actors.${pid} is not a participant id`); }
+    }
+    if (lint.participants && lint.participants.size > 8) { warn(`${fb}: ${lint.participants.size} participants; split it into smaller flows`); }
+    return { id: f.id, parsed };
+  }
+  function checkItem(it, b, a, flows) {
+    const i = it.raw;
+    const ib = `${b}/items/${i.id}`;
+    checkLinks(it, ib, a, flows);
+    if (!it.title) { err(`${ib}: missing title`); }
+    if (i.type != null && !ITEM_TYPES.includes(i.type)) { warn(`${ib}: type "${i.type}" is not ${ITEM_TYPES.join("|")}`); }
+    if (i.status != null && !ITEM_STATUSES.includes(it.status)) { warn(`${ib}: status "${i.status}" is not ${ITEM_STATUSES.join("|")}`); }
+    if (it.type !== "bug") {
+      if (i.severity) { warn(`${ib}: severity only applies to bugs (findings in a review); this is a ${it.type}`); }
+      return;
+    }
+    if (i.severity && !["high", "medium", "low"].includes(i.severity)) { warn(`${ib}: severity "${i.severity}" is not high|medium|low`); }
+    if (i.origin && !["pre-existing", "introduced"].includes(i.origin)) { warn(`${ib}: origin "${i.origin}" is not pre-existing|introduced`); }
+    if (!i.category) { warn(`${ib}: no category (name the subsystem affected)`); }
+    if (!i.where) { warn(`${ib}: no where (file:line)`); }
+    if (/^[A-Z]+-\d+\b/.test(it.title || "")) { warn(`${ib}: title starts with a tracker-style id; titles describe the problem`); }
+    if (i.severity !== "low" && !i.how && !i.fix) { warn(`${ib}: no how (the fix)`); }
+  }
   let flowCount = 0;
+  let legacyLists = 0;
   for (const a of plan.areas || []) {
     const b = `areas/${a.id}`;
     if (!a.title) { err(`${b}: missing title`); }
@@ -253,65 +375,26 @@ export function checkPlan(plan) {
     checkIds(a.flows, `${b}/flows`);
     checkIds(a.sections, `${b}/sections`);
     checkIds(a.options, `${b}/options`);
-    checkIds(a.openQuestions, `${b}/openQuestions`);
+    const flows = new Map();
     for (const f of a.flows || []) {
       flowCount++;
-      const fb = `${b}/flows/${f.id}`;
-      const src = String(f.mermaid || "").trim();
-      if (!f.title) { err(`${fb}: missing title`); }
-      if (!src) {
-        err(`${fb}: empty mermaid`);
-        continue;
-      }
-      const sequence = src.startsWith("sequenceDiagram");
-      if (!sequence) {
-        warn(`${fb}: not a sequenceDiagram; per-message notes only work on sequence diagrams (not linted; run verify.sh)`);
-      }
-      const lint = sequence ? lintSequence(src) : { errors: [], warnings: [], participants: null };
-      lint.errors.forEach(m => err(`${fb} ${m}`));
-      lint.warnings.forEach(m => warn(`${fb} ${m}`));
-      for (const [pid, tid] of Object.entries(f.actors || {})) {
-        if (!typeIds.has(tid)) { err(`${fb}: actors.${pid} → "${tid}" is not an api type id`); }
-        if (lint.participants && !lint.participants.has(pid)) { warn(`${fb}: actors.${pid} is not a participant id`); }
-      }
-      if (lint.participants && lint.participants.size > 8) { warn(`${fb}: ${lint.participants.size} participants; split it into smaller flows`); }
+      flows.set(f.id, checkFlow(f, b));
     }
-    checkIds(a.issues, `${b}/issues`);
-    const flowIds = new Set((a.flows || []).map(f => f.id));
-    for (const i of a.issues || []) {
-      const ib = `${b}/issues/${i.id}`;
-      checkIssueLinks(i, ib, a, flowIds);
-      if (!i.title) { err(`${ib}: missing title`); }
-      if (i.severity && !["high", "medium", "low"].includes(i.severity)) { warn(`${ib}: severity "${i.severity}" is not high|medium|low`); }
-      if (i.status && !["open", "fixing", "fixed", "wontfix"].includes(i.status)) { warn(`${ib}: status "${i.status}" is not open|fixing|fixed|wontfix`); }
-      if (i.origin && !["pre-existing", "introduced"].includes(i.origin)) { warn(`${ib}: origin "${i.origin}" is not pre-existing|introduced`); }
-      if (!i.category) { warn(`${ib}: no category (name the subsystem affected)`); }
-      if (!i.where) { warn(`${ib}: no where (file:line)`); }
-      if (/^[A-Z]+-\d+\b/.test(i.title || "")) { warn(`${ib}: title starts with a tracker-style id; titles describe the problem`); }
-      if (i.severity !== "low" && !i.fix) { warn(`${ib}: no fix`); }
+    const items = itemsOf(a, plan.kind);
+    legacyLists += ["issues", "work", "openQuestions"].filter(k => Array.isArray(a[k])).length;
+    checkIds(items.map(x => x.raw), `${b}/items`);
+    for (const it of items) {
+      checkItem(it, b, a, flows);
     }
-    checkIds(a.work, `${b}/work`);
-    const itemIds = new Set((a.issues || []).map(i => i.id));
-    for (const w of a.work || []) {
-      const wb = `${b}/work/${w.id}`;
-      if (itemIds.has(w.id)) { err(`${wb}: id also used by an issue in this area`); }
-      if (!w.title) { err(`${wb}: missing title`); }
-      if (w.type && !["new", "change", "remove", "risk", "decision"].includes(w.type)) { warn(`${wb}: type "${w.type}" is not new|change|remove|risk|decision`); }
-      if (w.status && !["todo", "doing", "done", "dropped"].includes(w.status)) { warn(`${wb}: status "${w.status}" is not todo|doing|done|dropped`); }
-      if (w.severity) { warn(`${wb}: work items don't take severity (that's for review findings); use type`); }
-      checkIssueLinks(w, wb, a, flowIds);
-    }
-    if (plan.kind === "plan" && (a.issues || []).length) {
-      warn(`${b}: plan.kind is "plan" but the area has issues; issues render as review findings with severity. Use work for planned changes and risks.`);
+    if (plan.kind === "plan" && items.some(x => x.type === "bug" && x.raw.severity && x.list !== "issues")) {
+      warn(`${b}: plan.kind is "plan" but the area has bugs with severity; they read as review findings. Planned changes and risks use new|change|remove|risk.`);
     }
     for (const s of a.sections || []) {
-      if (/^[A-Z]+-\d+\b/.test(s.title || "")) { warn(`${b}/sections/${s.id}: title "${s.title}" looks like an issue; use areas[].issues`); }
+      if (/^[A-Z]+-\d+\b/.test(s.title || "")) { warn(`${b}/sections/${s.id}: title "${s.title}" looks like an issue; use an item with type "bug"`); }
       if (!s.title) { err(`${b}/sections/${s.id}: missing title`); }
     }
-    for (const q of a.openQuestions || []) {
-      if (!q.text) { err(`${b}/openQuestions/${q.id}: missing text`); }
-    }
   }
+  if (legacyLists) { warn("uses the old issues/work/openQuestions lists (read as items). node scripts/migrate-plan.mjs converts them"); }
   checkIds(plan.roadmap, "roadmap");
   if (plan.api) {
     const types = plan.api.types || [];

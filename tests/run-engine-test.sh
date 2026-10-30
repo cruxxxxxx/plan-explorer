@@ -19,10 +19,22 @@ run() {
     | sed -n '/<pre id="results">/,/<\/pre>/p' | sed 's/<[^>]*>//g'
   rm -rf "$tmp"
 }
-# What live.mjs appends to the plan.js it serves (bookkeeping the agent no longer writes).
-auto='window.PLAN_AUTO = { version: 4, updated: "2026-10-30", changed: ["areas/local-store/work/op-log-table", "areas/sync/flows/reconnect", "areas/sync", "api/sync-client/m/sync"] };'
+#   anchor-test: insert a message into a flow; anchored items and notes stay put, numeric steps shift.
+#   compat-test and the legacy-plan runs: the old issues/work/openQuestions shape still renders, old nids land.
+# What live.mjs appends to the plan.js it serves (from history.json: bookkeeping the agent no longer writes).
+auto='window.PLAN_AUTO = { version: 4, updated: "2026-10-30", changed: ["areas/local-store/items/op-log-table", "areas/sync/flows/reconnect", "areas/sync", "api/sync-client/m/sync"] };'
+# No PLAN_AUTO line (another static server): the engine fetches history.json. This stub answers that fetch.
+hist='(() => { const f0 = window.fetch; window.fetch = (u, o) => (String(u).startsWith("history.json") ? Promise.resolve(new Response(JSON.stringify({ version: 7, updated: "2026-11-02", changed: ["areas/local-store/items/view-from-log"], changelog: [{ version: 7, date: "2026-11-02", what: "x" }] }))) : f0(u, o)); })();'
 lint="$(node "$S/tests/check-test.mjs")"
-out="$(echo "$lint"; run examples/review/plan.js interaction-test.js; run examples/plan/plan.js work-test.js; run examples/plan/plan.js auto-test.js "$auto")"
+out="$(echo "$lint"
+run examples/review/plan.js interaction-test.js
+run examples/plan/plan.js work-test.js
+run examples/plan/plan.js anchor-test.js
+run examples/plan/plan.js auto-test.js "$auto"
+run tests/fixtures/legacy-plan.js work-test.js
+run tests/fixtures/legacy-plan.js auto-test.js "$auto"
+run tests/fixtures/legacy-review.js compat-test.js
+run examples/plan/plan.js history-test.js "$hist")"
 echo "$out"
 echo "$out" | grep -q '^PASS' || { echo "no results (Mermaid offline?)"; exit 1; }
 ! echo "$out" | grep -q '^FAIL'
