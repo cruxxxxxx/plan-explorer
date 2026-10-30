@@ -400,17 +400,23 @@ function serve() {
   // The page reloads on plan.js edits and on history.json edits the server didn't make (git pull, `log`).
   let planMtime = mtimeOf(F.plan);
   const contentStamp = () => Math.max(planMtime, historyMtime);
+  // An editor's save can touch a file more than once (truncate, then write): one reload per burst.
+  let announceTimer = null;
+  const announcePlan = () => {
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => broadcast("plan", { mtime: contentStamp() }), 400);
+  };
   fs.watchFile(F.plan, { interval: 300 }, cur => {
     if (cur.mtimeMs && cur.mtimeMs !== planMtime) {
       planMtime = cur.mtimeMs;
       refreshRevisions();
-      broadcast("plan", { mtime: contentStamp() });
+      announcePlan();
     }
   });
   fs.watchFile(F.history, { interval: 300 }, cur => {
     if (cur.mtimeMs !== historyMtime) {
       historyMtime = cur.mtimeMs;
-      broadcast("plan", { mtime: contentStamp() });
+      announcePlan();
     }
   });
   fs.watchFile(ENGINE, { interval: 1000 }, () => broadcast("engine", {}));

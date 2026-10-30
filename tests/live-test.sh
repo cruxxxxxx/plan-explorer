@@ -121,6 +121,7 @@ node "$LIVE" log "$tmp/site" "Shortened the batching question" > /dev/null
 check "log appends one changelog entry with the changed ids to history.json" "$(js 'const e = j.changelog[j.changelog.length - 1]; j.changelog.length + " " + e.version + " " + e.changed.length + " " + e.what' < "$hist")" "3 3 2 Shortened the batching question"
 check "status reports the history version" "$(node "$LIVE" status "$tmp/site" | js 'j.version + " " + j.changed.length')" "3 2"
 # An edit to history.json the server didn't make (git pull) reaches the page: served PLAN_AUTO and a plan event.
+sleep 1.2  # let the reload from `log` above go out first (the server coalesces bursts for 400 ms)
 curl -s -N --max-time 3 -H "Cookie: $cookie" "$base/live/events" > "$tmp/events.txt" 2>/dev/null &
 sleep 0.8
 node -e 'const f=process.argv[1];const fs=require("fs");const h=JSON.parse(fs.readFileSync(f,"utf8"));h.version=5;fs.writeFileSync(f,JSON.stringify(h,null,2)+"\n")' "$hist"
